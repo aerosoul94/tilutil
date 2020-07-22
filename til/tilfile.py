@@ -4,6 +4,7 @@ import sys
 from til import datatypes as dt
 from til.utils import *
 
+
 class TypeString:
     """Representation of `qtype`"""
     def __init__(self, data, parent=None):
@@ -15,7 +16,8 @@ class TypeString:
         """Index/slice typestring"""
         if isinstance(x, slice):
             if x.step is not None:
-                raise NotImplementedError("Does")
+                raise NotImplementedError(
+                    "Typestring slice does not handle stepping")
             if x.stop is None:
                 return self._typestring[self._pos + x.start:]
             else:
@@ -30,6 +32,9 @@ class TypeString:
         """Increment stream position"""
         self._pos += n
         return self
+
+    def pos(self):
+        return self._pos
 
     def peek(self, n, pos=0):
         return self[pos:pos+n]
@@ -90,6 +95,34 @@ class TypeString:
                 break
         return toSigned32(val)
 
+    def read_da(self):
+        a = 0
+        b = 0
+        da = 0
+        base = 0
+        nelem = 0
+        while True:
+            typ = self.peeku8()
+            if typ & 0x80 == 0:
+                break
+            self.seek(1)
+            da = (da << 7) | typ & 0x7f
+            if b >= 4:
+                z = self.peeku8()
+                if z != 0:
+                    base = 0x10 * da | z & 0xf
+                nelem = (self.readu8() >> 4) & 7
+                while True:
+                    y = self.peeku8()
+                    if (y & 0x80) == 0:
+                        break
+                    self.seek(1)
+                    nelem = (nelem << 7) | y & 0x7f
+                    a += 1
+                    if a >= 4:
+                        return (True, nelem, base)
+        return (False, nelem, base)
+
     def read_complex_n(self):
         n = self.read_dt()
         if n == 0x7FFE:
@@ -122,8 +155,8 @@ class TypeString:
         if res & dt.TAH_HASATTRS:
             val = self.read_dt()
             for _ in range(val):
-                string = self.read_pstring()
-                self.read_dt()
+                self.read_pstring()
+                self.read_pstring()
 
     def read_type_attr(self):
         if self.is_tah_byte():
@@ -185,6 +218,7 @@ class TypeData:
     def _read(self):
         self._flags = u32(self._stream)
         self._name = cstring(self._stream)
+        # For symbols, this is the value
         self._ordinal = u64(self._stream) if self._flags >> 32 \
             else u32(self._stream)
 
@@ -199,6 +233,9 @@ class TypeData:
 
     def name(self):
         return self._name.decode("ascii")
+
+    def ordinal(self):
+        return self._ordinal
 
     def typestring(self):
         return self._typestr
@@ -215,7 +252,7 @@ class TypeData:
     def set_type_info(self, tinfo):
         self._tinfo = tinfo
 
-    def get_type_info(self, tinfo):
+    def get_type_info(self):
         return self._tinfo
 
     def _parse_plist(self):
@@ -339,12 +376,12 @@ class TIL:
 
     def _load_bucket(self, bucket):
         buffer = io.BytesIO(bucket.buffer)
-        for i in range(bucket.ndefs):
+        for _ in range(bucket.ndefs):
             bucket.add_type(self._read_type(buffer))
 
     def _load_macros(self, bucket):
         buffer = io.BytesIO(bucket.buffer)
-        for i in range(bucket.ndefs):
+        for _ in range(bucket.ndefs):
             bucket.add_type(self._read_macro(buffer))
 
     def _process_bucket(self, bucket):
@@ -370,37 +407,45 @@ class TIL:
             return TypeInfo(typ)
 
         if base > dt._BT_LAST_BASIC:
+            typedata = None
+            if base == dt.BT_COMPLEX and flags != dt.BTMT_TYPEDEF:
+                t = typestr.get()
+                t.seek(1)
+                N = t.read_complex_n()
+                if N == 0:
+                    typedata = dt.TypedefTypeData()
+                    typedata.name = t.read_pstring()
+                    # I don't like this, we're going to need to come up with a
+                    # way to do this automatically
+                    typestr.seek(t.pos())
+                    return TypeInfo.create_type_info(typ, typedata)
+
             if base == dt.BT_PTR:
-                typedata = dt.PointerTypeData().deserialize(self,
-                                                            typestr,
-                                                            fields,
-                                                            fieldcmts)
-                return TypeInfo.create_type_info(typ, typedata)
+                typedata = dt.PointerTypeData() \
+                    .deserialize(self, typestr, fields, fieldcmts)
             elif base == dt.BT_ARRAY:
-                typedata = dt.ArrayTypeData().deserialize(self,
-                                                          typestr,
-                                                          fields,
-                                                          fieldcmts)
-                return TypeInfo.create_type_info(typ, typedata)
+                typedata = dt.ArrayTypeData() \
+                    .deserialize(self, typestr, fields, fieldcmts)
             elif base == dt.BT_FUNC:
-                typedata = dt.FuncTypeData().deserialize(self,
-                                                         typestr,
-                                                         fields,
-                                                         fieldcmts)
-                return TypeInfo.create_type_info(typ, typedata)
+                typedata = dt.FuncTypeData() \
+                    .deserialize(self, typestr, fields, fieldcmts)
             elif base == dt.BT_COMPLEX:
                 if flags == dt.BTMT_STRUCT:
-                    typedata = dt.UdtTypeData().deserialize(self,
-                                                            typestr,
-                                                            fields,
-                                                            fieldcmts)
-                    return TypeInfo.create_type_info(typ, typedata)
+                    typedata = dt.UdtTypeData() \
+                        .deserialize(self, typestr, fields, fieldcmts)
+                elif flags == dt.BTMT_ENUM:
+                    typedata = dt.EnumTypeData() \
+                        .deserialize(self, typestr, fields, fieldcmts)
                 elif flags == dt.BTMT_TYPEDEF:
-                    typedata = dt.TypedefTypeData().deserialize(self,
-                                                                typestr,
-                                                                fields,
-                                                                fieldcmts)
-                    return TypeInfo.create_type_info(typ, typedata)
+                    typedata = dt.TypedefTypeData() \
+                        .deserialize(self, typestr, fields, fieldcmts)
+            elif base == dt.BT_BITFIELD:
+                typedata = dt.BitfieldTypeData() \
+                    .deserialize(self, typestr, fields, fieldcmts)
+            return TypeInfo.create_type_info(typ, typedata)
+
+    def header(self):
+        return self._header
 
     def syms(self):
         return self._syms
@@ -411,8 +456,11 @@ class TIL:
     def macros(self):
         return self._macros
 
-    def typeinfos(self):
-        return self._typeinfos
+    def get_named_type(self, name, is_type):
+        bucket = self._types if is_type else self._syms
+        for typ in bucket.get_types():
+            if name == typ.name():
+                return typ
 
 
 if __name__ == "__main__":
@@ -421,12 +469,28 @@ if __name__ == "__main__":
         exit()
     with open(sys.argv[1], "rb") as fp, open("log.txt", "w") as log:
         til = TIL(fp)
-        log.write("Syms:\n")
-        for t in til.syms().get_types():
-            log.write(f"{t.name}\n")
-        log.write("Types:\n")
-        for t in til.types().get_types():
-            log.write(f"{t.name}\n")
-        log.write("Macros:\n")
-        for m in til.macros().get_types():
-            log.write(f"{m.name()}\n")
+        print(til.get_named_type("Elf32_Ehdr", True).name())
+        # log.write("Syms:\n")
+        # for t in til.syms().get_types():
+        #     log.write(f"{t.name}\n")
+        # log.write("Types:\n")
+        # for t in til.types().get_types():
+        #     log.write(f"{t.name}\n")
+        # log.write("Macros:\n")
+        # for m in til.macros().get_types():
+        #     log.write(f"{m.name()}\n")
+        # for sym in til.syms().get_types():
+        #     tinfo = sym.get_type_info()
+        #     if tinfo is not None:
+        #         base = tinfo.base_type()
+        #         if base == dt.BTF_TYPEDEF:
+        #             print(f"#define {sym.name()} {sym.ordinal()}")
+        #         elif base == dt.BT_FUNC:
+        #             typedetails = tinfo.typedetails()
+        #             func_name = sym.name()
+        #             ret_type = typedetails.rettype
+        #
+        #             args = "void"
+        #             print(f"{ret_type} {func_name}({args})")
+        #         else:
+        #             print(f"{sym.name()}")

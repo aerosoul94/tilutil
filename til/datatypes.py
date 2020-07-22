@@ -70,10 +70,27 @@ BT_RESERVED = 0x0F
 BTM_CONST = 0x40
 BTM_VOLATILE = 0x80
 
+BTE_SIZE_MASK = 0x07
+BTE_RESERVED = 0x08
+BTE_BITFIELD = 0x10
+BTE_OUT_MASK = 0x60
+BTE_HEX = 0x00
+BTE_CHAR = 0x20
+BTE_SDEC = 0x40
+BTE_UDEC = 0x60
+BTE_ALWAYS = 0x80
+
+BTF_STRUCT = BT_COMPLEX | BTMT_STRUCT
+BTF_UNION = BT_COMPLEX | BTMT_UNION
+BTF_ENUM = BT_COMPLEX | BTMT_ENUM
+BTF_TYPEDEF = BT_COMPLEX | BTMT_TYPEDEF
+
 TAH_BYTE = 0xFE
 FAH_BYTE = 0xFF
 
 TAH_HASATTRS = 0x0010
+
+TAENUM_64BIT = 0x0020
 
 CM_MASK = 0x03
 CM_UNKNOWN = 0x00
@@ -121,6 +138,7 @@ class PointerTypeData:
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
+
         if flags == BTMT_CLOSURE:
             ptr_size = typestr.readu8()
             # Next byte MUST be RESERVED_BYTE
@@ -146,6 +164,7 @@ class ArrayTypeData:
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
+
         if flags & BTMT_NONBASED:
             self.base = 0
             self.nelems = typestr.read_dt()
@@ -187,23 +206,21 @@ class FuncTypeData:
             self.flags = 0
         self.cc = cm
         self.flags |= 4 * flags
-        if typestr.peeku8() == TAH_BYTE:
-            typestr.parse_type_attr()
+        typestr.read_type_attr()
         self.rettype = til.deserialize(typestr.ref(), fields, fieldcmts)
-        if self.cc  == CM_CC_SPECIALE or self.cc == CM_CC_SPECIALP or \
-            self.cc == CM_CC_SPECIAL:
+        cc = self.cc & CM_CC_MASK
+        if cc == CM_CC_SPECIALE or cc == CM_CC_SPECIALP or cc == CM_CC_SPECIAL:
             if (self.rettype.base_type() & TYPE_FULL_MASK) == 1:
                 self.retloc = self.deserialize_argloc(typestr.get())
-        if self.cc != CM_CC_VOIDARG:
+        if cc != CM_CC_VOIDARG:
             N = typestr.read_dt()
             if N > 256:
                 raise ValueError("invalid arg count!")
             if N > 0:
                 for n in range(N):
                     arg = FuncArg()
-                    if fields is not None:
-                        if n < len(fields):
-                            arg.name = fields[n]
+                    if fields is not None and n < len(fields):
+                        arg.name = fields[n]
                     fah = typestr.peeku8()
                     if fah == FAH_BYTE:
                         typestr.seek(1)
@@ -214,6 +231,7 @@ class FuncTypeData:
                         self.cc == CM_CC_SPECIALP or \
                          self.cc == CM_CC_SPECIAL:
                         arg.argloc = self.deserialize_argloc(typestr.get())
+                    self.args.append(arg)
         return self
 
     def deserialize_argloc(self, typestr):
@@ -251,6 +269,7 @@ class UdtTypeData:
 
         N = typestr.read_complex_n()
         if N == 0:
+            # TODO: I don't think this code is necessary anymore
             string = typestr.read_pstring()
             if len(string) > 1 and string[0] == "#":
                 raise NotImplementedError("type ordinals not implemented.")
@@ -266,6 +285,7 @@ class UdtTypeData:
                                               fields,
                                               fieldcmts)
                 self.tafld_bits = typestr.read_sdacl_attr()
+                self.members.append(member)
         return self
 
 class EnumMember:
@@ -277,11 +297,63 @@ class EnumMember:
 class EnumTypeData:
     """Representation of enum_type_data_t"""
     def __init__(self):
-        self.group_sizes = None # intvec_t
+        self.group_sizes = [] # intvec_t (qvector<int>)
         self.taenum_bits = 0
         self.bte = 0
         self.members = []
 
+    def deserialize(self, til, typestr, fields, fieldcmts):
+        typ = typestr.readu8()
+        base = typ & TYPE_BASE_MASK
+        flags = typ & TYPE_FLAGS_MASK
+        mod = typ & TYPE_MODIF_MASK
+
+        N = typestr.read_complex_n()
+        taenum_bits = typestr.read_type_attr()
+        self.taenum_bits = taenum_bits if taenum_bits is not None else 0
+        self.bte = typestr.readu8()
+        if not (self.bte & BTE_ALWAYS):
+            return
+        mask = self.calc_mask(til)
+        offset = 0
+        lo = 0
+        hi = 0
+        for m in range(N):
+            member = EnumMember()
+            if fields is not None:
+                if m < len(fields):
+                    member.name = fields[m]
+                #else:
+                #    raise IndexError("m does not index fields")
+            if fieldcmts is not None:
+                if m < len(fieldcmts):
+                    member.cmt = fieldcmts[m]
+                #else
+                #    raise IndexError("m does not index fieldcmts")
+            lo = typestr.read_de()
+            if self.taenum_bits & TAENUM_64BIT:
+                hi = typestr.read_de()
+            if self.bte & BTE_BITFIELD:
+                self.group_sizes.append(typestr.read_dt())
+            member.value = (lo | (hi << 32)) & mask
+            self.members.append(member)
+        return self
+
+    def calc_mask(self, til):
+        bytesize = 0
+        emsize = self.bte & BTE_SIZE_MASK
+        if emsize != 0:
+            bytesize = 1 << (emsize - 1)
+        else:
+            bytesize = til.header().size_e
+        #elif (ph.flag >> 12) & 1:
+        #    mask = ph.nortify(ev_get_default_enum_size)
+        #else:
+        #    mask = -1
+        bitsize = bytesize * 8
+        if bitsize < 64:
+            return (1 << bitsize) - 1
+        return 0xffffffffffffffff
 
 
 class TypedefTypeData:
@@ -315,3 +387,16 @@ class BitfieldTypeData:
         self.nbytes = 0
         self.width = 0
         self.is_unsigned = False
+
+    def deserialize(self, til, typestr, fields, fieldcmts):
+        typ = typestr.readu8()
+        base = typ & TYPE_BASE_MASK
+        flags = typ & TYPE_FLAGS_MASK
+        mod = typ & TYPE_MODIF_MASK
+
+        dt = typestr.read_dt()
+        self.nbytes = 1 << (flags >> 4)
+        self.width = dt >> 1
+        self.is_unsigned = dt & 1
+        return self
+
