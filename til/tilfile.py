@@ -6,7 +6,14 @@ from til.utils import *
 
 
 class TypeString:
-    """Representation of `qtype`"""
+    """Representation of `qtype`
+
+    TODO: Split this type into multiple types.
+        class Buffer
+        and
+        class TypeString(Buffer)
+        class PascalStringList(Buffer)
+    """
     def __init__(self, data, parent=None):
         self._pos = 0
         self._typestring = data

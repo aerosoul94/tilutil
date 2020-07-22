@@ -16,3 +16,14 @@ class TestTypeString(TestCase):
         self.assertEqual(ts.readu8(), 0x02)
         self.assertEqual(ts.readu16(), 0x0403)
         self.assertEqual(ts.readu32(), 0x08070605)
+
+    def test_len(self):
+        ts = TypeString(b'\x01\x02\x03\x04\x05')
+        self.assertEqual(len(ts), 5)
+
+    def test_seek(self):
+        ts = TypeString(b'\x01\x02\x03\x04')
+        ts.seek(3)
+        self.assertEqual(ts.pos(), 3)
+        self.assertEqual(ts.peeku8(), 0x04)
+
