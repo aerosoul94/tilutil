@@ -90,6 +90,18 @@ FAH_BYTE = 0xFF
 
 TAH_HASATTRS = 0x0010
 
+TAUDT_UNALIGNED = 0x0040
+TAUDT_MSSTRUCT = 0x0020
+TAUDT_CPPOBJ = 0x0080
+
+TAFLD_BASECLASS = 0x0020
+TAFLD_UNALIGNED = 0x0040
+TAFLD_VIRTBASE = 0x0080
+
+TAPTR_PTR32 = 0x0020
+TAPTR_PTR64 = 0x0040
+TAPTR_RESTRICT = 0x0060
+
 TAENUM_64BIT = 0x0020
 
 CM_MASK = 0x03
@@ -124,6 +136,7 @@ CM_CC_RESERVE3 = 0xC0
 CM_CC_SPECIALE = 0xD0
 CM_CC_SPECIALP = 0xE0
 CM_CC_SPECIAL = 0xF0
+
 
 class PointerTypeData:
     """Representation of ptr_type_data_t"""
@@ -187,10 +200,10 @@ class FuncTypeData:
     def __init__(self):
         self.args = []
         self.flags = 0
-        self.rettype = None # tinfo_t
-        self.retloc = None  # argloc_t
-        self.stkargs = None # uval_t
-        self.spoiled = None # reginfovec_t
+        self.rettype = None     # tinfo_t
+        self.retloc = None      # argloc_t
+        self.stkargs = None     # uval_t
+        self.spoiled = None     # reginfovec_t
         self.cc = 0
 
     def deserialize(self, til, typestr, fields, fieldcmts):
@@ -229,7 +242,7 @@ class FuncTypeData:
                                                fields, fieldcmts)
                     if self.cc == CM_CC_SPECIALE or \
                         self.cc == CM_CC_SPECIALP or \
-                         self.cc == CM_CC_SPECIAL:
+                            self.cc == CM_CC_SPECIAL:
                         arg.argloc = self.deserialize_argloc(typestr.get())
                     self.args.append(arg)
         return self
@@ -248,6 +261,7 @@ class UdtMember:
         self.effalign = 0
         self.tafld_bits = 0
         self.fda = 0
+
 
 class UdtTypeData:
     """Representation of udt_type_data_t"""
@@ -275,18 +289,28 @@ class UdtTypeData:
                 raise NotImplementedError("type ordinals not implemented.")
             # TODO: Need to implement struct references
         else:
+            attr = typestr.read_sdacl_attr()
             ALPOW = N & 7
             MCNT = N >> 3
             self.pack = ALPOW
-            typestr.read_sdacl_attr()
+            if attr is not None:
+                self.taudt_bits = attr
             for n in range(MCNT):
                 member = UdtMember()
+                if fields is not None and n < len(fields):
+                    member.name = fields[n]
+                if fieldcmts is not None and n < len(fieldcmts):
+                    member.cmt = fieldcmts[n]
                 member.type = til.deserialize(typestr.ref(),
                                               fields,
                                               fieldcmts)
-                self.tafld_bits = typestr.read_sdacl_attr()
+                attr = typestr.read_sdacl_attr()
+                if attr is not None:
+                    member.tafld_bits = attr
+                    member.fda = attr & 0xf
                 self.members.append(member)
         return self
+
 
 class EnumMember:
     def __init__(self):
@@ -294,10 +318,11 @@ class EnumMember:
         self.cmt = None     # qstring
         self.value = 0
 
+
 class EnumTypeData:
     """Representation of enum_type_data_t"""
     def __init__(self):
-        self.group_sizes = [] # intvec_t (qvector<int>)
+        self.group_sizes = []   # intvec_t (qvector<int>)
         self.taenum_bits = 0
         self.bte = 0
         self.members = []
@@ -323,12 +348,12 @@ class EnumTypeData:
             if fields is not None:
                 if m < len(fields):
                     member.name = fields[m]
-                #else:
-                #    raise IndexError("m does not index fields")
+                # else:
+                #     raise IndexError("m does not index fields")
             if fieldcmts is not None:
                 if m < len(fieldcmts):
                     member.cmt = fieldcmts[m]
-                #else
+                # else
                 #    raise IndexError("m does not index fieldcmts")
             lo = typestr.read_de()
             if self.taenum_bits & TAENUM_64BIT:
@@ -340,15 +365,14 @@ class EnumTypeData:
         return self
 
     def calc_mask(self, til):
-        bytesize = 0
         emsize = self.bte & BTE_SIZE_MASK
         if emsize != 0:
             bytesize = 1 << (emsize - 1)
         else:
             bytesize = til.header().size_e
-        #elif (ph.flag >> 12) & 1:
+        # elif (ph.flag >> 12) & 1:
         #    mask = ph.nortify(ev_get_default_enum_size)
-        #else:
+        # else:
         #    mask = -1
         bitsize = bytesize * 8
         if bitsize < 64:

@@ -127,8 +127,8 @@ class TypeString:
                     nelem = (nelem << 7) | y & 0x7f
                     a += 1
                     if a >= 4:
-                        return (True, nelem, base)
-        return (False, nelem, base)
+                        return True, nelem, base
+        return False, nelem, base
 
     def read_complex_n(self):
         n = self.read_dt()
@@ -392,9 +392,9 @@ class TIL:
             bucket.add_type(self._read_macro(buffer))
 
     def _process_bucket(self, bucket):
-        self._deserialize(bucket)
+        self._deserialize_bucket(bucket)
 
-    def _deserialize(self, bucket):
+    def _deserialize_bucket(self, bucket):
         for tdata in bucket.get_types():
             print(f"Deserializing {tdata.name()}")
             tinfo = self.deserialize(tdata.typestring(),
