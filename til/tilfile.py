@@ -6,14 +6,7 @@ from til.utils import *
 
 
 class TypeString:
-    """Representation of `qtype`
-
-    TODO: Split this type into multiple types.
-        class Buffer
-        and
-        class TypeString(Buffer)
-        class PascalStringList(Buffer)
-    """
+    """Representation of `qtype`."""
     def __init__(self, data, parent=None):
         self._pos = 0
         self._typestring = data
@@ -46,50 +39,58 @@ class TypeString:
     def peek(self, n, pos=0):
         return self[pos:pos+n]
 
-    def peeku8(self, pos=0):
+    def peek_db(self, pos=0):
+        """ u8 val = *(u8*)ptr """
         return self[pos]
-
-    def peeku16(self, pos=0):
-        return int.from_bytes(self[pos:pos+2], byteorder='little')
-
-    def peeku32(self, pos=0):
-        return int.from_bytes(self[pos:pos+4], byteorder='little')
 
     def read(self, n, pos=0):
         data = self[pos:pos+n]
         self.seek(n)
         return data
 
-    def readu8(self, pos=0):
+    # TODO: Replace with read_db
+    def read_db(self, pos=0):
+        """ u8 val = *(u8*)ptr++"""
         data = self[pos]
         self.seek(1)
         return data
-        
-    def readu16(self, pos=0):
-        data = int.from_bytes(self[pos:pos+2], byteorder='little')
-        self.seek(2)
-        return data
-        
-    def readu32(self, pos=0):
-        data = int.from_bytes(self[pos:pos+4], byteorder='little')
-        self.seek(4)
-        return data
 
     def seek(self, n):
+        """ ptr+=n """
         self._pos += n
         if self._parent is not None:
             self._parent.seek(n)
 
+    def get(self):
+        """ ptr_copy = ptr """
+        return TypeString(self[0:])
+
+    def ref(self):
+        """ ptr_ref = &ptr """
+        return TypeString(self[0:], parent=self)
+
     def read_dt(self):
-        val = self.readu8()
+        """ Reads 1 to 2 bytes.
+
+        Value Range: 0-0xFFFE
+        Usage: 16bit numbers
+        :return: int
+        """
+        val = self.read_db()
         if val & 0x80:
-            val = (val & 0x7f | self.readu8() << 7)
+            val = (val & 0x7f | self.read_db() << 7)
         return val - 1
 
     def read_de(self):
+        """ Reads 1 to 5 bytes
+
+        Value Range: 0-0xFFFFFFFF
+        Usage: Enum Deltas
+        :return: int
+        """
         val = 0
         while True:
-            b = self.readu8()
+            b = self.read_db()
             hi = val << 6
             sign = (b & 0x80)
             if not sign:
@@ -100,27 +101,33 @@ class TypeString:
             val = lo | hi
             if not sign:
                 break
-        return toSigned32(val)
+        return to_s32(val)
 
     def read_da(self):
+        """ Reads 1 to 9 bytes.
+
+        ValueRange: 0x-0x7FFFFFFF, 0-0xFFFFFFFF
+        Usage: Arrays
+        :return: (int, int)
+        """
         a = 0
         b = 0
         da = 0
         base = 0
         nelem = 0
         while True:
-            typ = self.peeku8()
+            typ = self.peek_db()
             if typ & 0x80 == 0:
                 break
             self.seek(1)
             da = (da << 7) | typ & 0x7f
             if b >= 4:
-                z = self.peeku8()
+                z = self.peek_db()
                 if z != 0:
                     base = 0x10 * da | z & 0xf
-                nelem = (self.readu8() >> 4) & 7
+                nelem = (self.read_db() >> 4) & 7
                 while True:
-                    y = self.peeku8()
+                    y = self.peek_db()
                     if (y & 0x80) == 0:
                         break
                     self.seek(1)
@@ -133,30 +140,34 @@ class TypeString:
     def read_complex_n(self):
         n = self.read_dt()
         if n == 0x7FFE:
-            n = self.get_de()
+            n = self.read_de()
         return n
 
+    def read_pstring(self):
+        length = self.read_dt()
+        return self.read(length).decode("ascii")
+
     def is_tah_byte(self):
-        return self.peeku8() == dt.TAH_BYTE
+        return self.peek_db() == dt.TAH_BYTE
 
     def is_sdacl_byte(self):
-        return ((self.peeku8() & 0xCF) ^ 0xC0) <= 1
+        return ((self.peek_db() & 0xCF) ^ 0xC0) <= 1
 
     def parse_type_attr(self):
-        tah = self.readu8()
+        tah = self.read_db()
         tmp = ((tah & 1) | ((tah >> 3) & 6)) + 1
         res = 0
         if tah == dt.TAH_BYTE or tmp == 8:
             if tmp == 8:
                 res = tmp
-            next_byte = self.readu8()
+            next_byte = self.read_db()
             shift = 0
             while True:
                 res |= (next_byte & 0x7f) << shift
                 if next_byte & 0x80 == 0:
                     break
                 shift += 7
-                next_byte = self.readu8()
+                next_byte = self.read_db()
                 if next_byte == 0:
                     raise ValueError("parse_type_attr(): failed to parse")
         if res & dt.TAH_HASATTRS:
@@ -173,15 +184,6 @@ class TypeString:
         if self.is_sdacl_byte():
             return self.read_type_attr()
 
-    def read_pstring(self):
-        length = self.read_dt()
-        return self.read(length).decode("ascii")
-
-    def get(self):
-        return TypeString(self[0:])
-
-    def ref(self):
-        return TypeString(self[0:], parent=self)
 
     @staticmethod
     def read_typestring(stream):
@@ -192,6 +194,64 @@ class TypeString:
             if b == b'\0':
                 break
         return TypeString(bytes(typestring))
+
+
+class PStringList:
+    """List of pascal-like strings.
+
+    p_string: dt length, db characters
+    p_list: one or more p_strings
+
+    Args:
+        data (bytes): null terminated p_list bytes
+    """
+    def __init__(self, data):
+        self._pos = 0
+        self._data = data
+
+    def seek(self, n):
+        """ ptr+=n """
+        self._pos += n
+        if self._parent is not None:
+            self._parent.seek(n)
+
+    def read(self, n, pos=0):
+        data = self[pos:pos+n]
+        self.seek(n)
+        return data
+
+    # TODO: Replace with read_db
+    def read_db(self, pos=0):
+        """ u8 val = *(u8*)ptr++"""
+        data = self[pos]
+        self.seek(1)
+        return data
+
+    def read_dt(self):
+        """ Reads 1 to 2 bytes.
+
+        Value Range: 0-0xFFFE
+        Usage: 16bit numbers
+        :return: int
+        """
+        val = self.read_db()
+        if val & 0x80:
+            val = (val & 0x7f | self.read_db() << 7)
+        return val - 1
+
+    def read_pstring(self):
+        length = self.read_dt()
+        return self.read(length).decode("ascii")
+
+    @staticmethod
+    def read_p_list(stream):
+        p_list = bytearray()
+        while True:
+            b = stream.read(1)
+            p_list += b
+            if b == b'\0':
+                break
+        return PStringList(bytes(p_list))
 
 
 class TypeInfo:
@@ -398,22 +458,23 @@ class TIL:
         for tdata in bucket.get_types():
             print(f"Deserializing {tdata.name()}")
             tinfo = self.deserialize(tdata.typestring(),
-                             tdata.fields(),
-                             tdata.fieldcmts())
+                                     tdata.fields(),
+                                     tdata.fieldcmts())
             if tinfo is not None:
                 self._typeinfos.append(tinfo)
                 tdata.set_type_info(tinfo)
 
     def deserialize(self, typestr, fields, fieldcmts):
-        typ = typestr.peeku8()
+        typ = typestr.peek_db()
         base = typ & dt.TYPE_BASE_MASK
         flags = typ & dt.TYPE_FLAGS_MASK
         mod = typ & dt.TYPE_MODIF_MASK
-        if base <= dt._BT_LAST_BASIC:
+
+        if base <= dt.BT_LAST_BASIC:
             typestr.seek(1)
             return TypeInfo(typ)
 
-        if base > dt._BT_LAST_BASIC:
+        if base > dt.BT_LAST_BASIC:
             typedata = None
             if base == dt.BT_COMPLEX and flags != dt.BTMT_TYPEDEF:
                 t = typestr.get()

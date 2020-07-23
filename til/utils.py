@@ -16,7 +16,7 @@ def u64(stream):
     return int.from_bytes(stream.read(8), byteorder='little')
 
 
-def toSigned32(n):
+def to_s32(n):
     n = n & 0xffffffff
     return n | (-(n & 0x80000000))
 

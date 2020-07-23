@@ -35,7 +35,7 @@ BTMT_DOUBLE = 0x10
 BTMT_LNGDBL = 0x20
 BTMT_SPECFLT = 0x30
 
-_BT_LAST_BASIC = BT_FLOAT
+BT_LAST_BASIC = BT_FLOAT
 
 BT_PTR = 0x0A
 BTMT_DEFPTR = 0x00
@@ -147,19 +147,19 @@ class PointerTypeData:
         self.taptr_bits = 0
 
     def deserialize(self, til, typestr, fields, fieldcmts):
-        typ = typestr.readu8()
+        typ = typestr.read_db()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
 
         if flags == BTMT_CLOSURE:
-            ptr_size = typestr.readu8()
+            ptr_size = typestr.read_db()
             # Next byte MUST be RESERVED_BYTE
             if ptr_size == RESERVED_BYTE:
                 # and after it ::BT_FUNC
                 self.closure = til.deserialize(typestr.ref())
             else:
-                self.based_ptr_size = typestr.readu8()
+                self.based_ptr_size = typestr.read_db()
         self.taptr_bits = typestr.read_type_attr()
         self.obj_type = til.deserialize(typestr.ref(), fields, fieldcmts)
         return self
@@ -173,7 +173,7 @@ class ArrayTypeData:
         self.nelems = 0
 
     def deserialize(self, til, typestr, fields, fieldcmts):
-        typ = typestr.readu8()
+        typ = typestr.read_db()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
@@ -207,12 +207,12 @@ class FuncTypeData:
         self.cc = 0
 
     def deserialize(self, til, typestr, fields, fieldcmts):
-        typ = typestr.readu8()
+        typ = typestr.read_db()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
 
-        cm = typestr.readu8()
+        cm = typestr.read_db()
         if (cm & CM_CC_MASK) == CM_CC_SPOILED:
             pass
         else:
@@ -234,7 +234,7 @@ class FuncTypeData:
                     arg = FuncArg()
                     if fields is not None and n < len(fields):
                         arg.name = fields[n]
-                    fah = typestr.peeku8()
+                    fah = typestr.peek_db()
                     if fah == FAH_BYTE:
                         typestr.seek(1)
                         arg.flags = typestr.read_de()
@@ -276,39 +276,35 @@ class UdtTypeData:
         self.is_union = False
 
     def deserialize(self, til, typestr, fields, fieldcmts):
-        typ = typestr.readu8()
+        typ = typestr.read_db()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
 
+        self.is_union = (typ & TYPE_FULL_MASK) == BTF_UNION
         N = typestr.read_complex_n()
         if N == 0:
-            # TODO: I don't think this code is necessary anymore
-            string = typestr.read_pstring()
-            if len(string) > 1 and string[0] == "#":
-                raise NotImplementedError("type ordinals not implemented.")
-            # TODO: Need to implement struct references
-        else:
+            raise ValueError("Should have been parsed as typedef")
+        attr = typestr.read_sdacl_attr()
+        alpow = N & 7
+        mcnt = N >> 3
+        self.pack = alpow
+        if attr is not None:
+            self.taudt_bits = attr
+        for n in range(mcnt):
+            member = UdtMember()
+            if fields is not None and n < len(fields):
+                member.name = fields[n]
+            if fieldcmts is not None and n < len(fieldcmts):
+                member.cmt = fieldcmts[n]
+            member.type = til.deserialize(typestr.ref(),
+                                          fields,
+                                          fieldcmts)
             attr = typestr.read_sdacl_attr()
-            ALPOW = N & 7
-            MCNT = N >> 3
-            self.pack = ALPOW
             if attr is not None:
-                self.taudt_bits = attr
-            for n in range(MCNT):
-                member = UdtMember()
-                if fields is not None and n < len(fields):
-                    member.name = fields[n]
-                if fieldcmts is not None and n < len(fieldcmts):
-                    member.cmt = fieldcmts[n]
-                member.type = til.deserialize(typestr.ref(),
-                                              fields,
-                                              fieldcmts)
-                attr = typestr.read_sdacl_attr()
-                if attr is not None:
-                    member.tafld_bits = attr
-                    member.fda = attr & 0xf
-                self.members.append(member)
+                member.tafld_bits = attr
+                member.fda = attr & 0xf
+            self.members.append(member)
         return self
 
 
@@ -328,17 +324,19 @@ class EnumTypeData:
         self.members = []
 
     def deserialize(self, til, typestr, fields, fieldcmts):
-        typ = typestr.readu8()
+        typ = typestr.read_db()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
 
         N = typestr.read_complex_n()
+        if N == 0:
+            raise ValueError("Should have been parsed as typedef")
         taenum_bits = typestr.read_type_attr()
         self.taenum_bits = taenum_bits if taenum_bits is not None else 0
-        self.bte = typestr.readu8()
+        self.bte = typestr.read_db()
         if not (self.bte & BTE_ALWAYS):
-            return
+            raise ValueError("Enum bte must have BTE_ALWAYS set")
         mask = self.calc_mask(til)
         offset = 0
         lo = 0
@@ -390,7 +388,7 @@ class TypedefTypeData:
         self.resolve = False
 
     def deserialize(self, til, typestr, fields, fieldcmts):
-        typ = typestr.readu8()
+        typ = typestr.read_db()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
@@ -413,7 +411,7 @@ class BitfieldTypeData:
         self.is_unsigned = False
 
     def deserialize(self, til, typestr, fields, fieldcmts):
-        typ = typestr.readu8()
+        typ = typestr.read_db()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK

@@ -1,3 +1,5 @@
+#NOTE: OLD CODE. THIS IS HERE JUST FOR REFERENCE
+
 import struct
 import sys
 import zlib
