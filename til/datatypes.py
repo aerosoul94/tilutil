@@ -1,3 +1,5 @@
+from til.utils import to_s32
+
 RESERVED_BYTE = 0xFF
 
 TYPE_BASE_MASK = 0x0F
@@ -16,7 +18,9 @@ BTMT_SIZE128 = 0x30
 BT_INT8 = 0x02
 BT_INT16 = 0x03
 BT_INT32 = 0x04
-BT_INT64 = 0x06
+BT_INT64 = 0x05
+BT_INT128 = 0x06
+BT_INT = 0x07
 BTMT_UNKSIGN = 0x00
 BTMT_SIGNED = 0x10
 BTMT_USIGNED = 0x20
@@ -183,7 +187,7 @@ class ArrayTypeData:
             self.nelems = typestr.read_dt()
         else:
             self.nelems, self.base = typestr.read_da()
-        self.elem_type = til.deserialize(typestr.get(), fields, fieldcmts)
+        self.elem_type = til.deserialize(typestr.ref(), fields, fieldcmts)
         return self
 
 
@@ -262,6 +266,55 @@ class UdtMember:
         self.tafld_bits = 0
         self.fda = 0
 
+def get_name_for_type(tinfo):
+    typ = tinfo.base_type()
+    base = typ & TYPE_BASE_MASK
+    flags = typ & TYPE_FLAGS_MASK
+    mod = typ & TYPE_MODIF_MASK
+    res = ""
+    if mod & BTM_CONST:
+        res += "const "
+    if mod & BTM_VOLATILE:
+        res += "volatile "
+    if base < BT_LAST_BASIC:
+        if base == BT_VOID:
+            return "void"
+        elif base <= BT_INT:
+            if flags & BTMT_SIGNED:
+                res += "signed "
+            elif flags & BTMT_UNSIGNED:
+                res += "unsigned "
+            elif flags & BTMT_CHAR:
+                return res + "char"
+            if base == BT_INT8:
+                return res + "__int8"
+            elif base == BT_INT16:
+                return res + "__int16"
+            elif base == BT_INT32:
+                return res + "__int32"
+            elif base == BT_INT64:
+                return res + "__int64"
+            elif base == BT_INT128:
+                return res + "__int128"
+            elif base == BT_INT:
+                return res + "int"
+    elif base == BT_PTR:
+        details = tinfo.typedetails()
+        basetype = get_name_for_type(details.obj_type)
+        return f"{basetype}*"
+    elif base == BT_ARRAY:
+        details = tinfo.typedetails()
+        basetype = get_name_for_type(details.elem_type)
+        return f"{basetype}[{details.nelems}]"
+    elif base == BT_FUNC:
+        details = tinfo.typedetails()
+        rettype = get_name_for_type(details.rettype)
+        return f"{rettype}*"
+    elif base == BT_COMPLEX:
+        details = tinfo.typedetails()
+        if isinstance(details, TypedefTypeData):
+            return details.name
+
 
 class UdtTypeData:
     """Representation of udt_type_data_t"""
@@ -307,6 +360,15 @@ class UdtTypeData:
             self.members.append(member)
         return self
 
+    def print(self, name):
+        keyword = "union" if self.is_union else "struct"
+        print(f"{keyword} {name}")
+        print("{")
+        for member in self.members:
+            basetype = get_name_for_type(member.type)
+            print(f"  {basetype} {member.name};")
+        print("};")
+
 
 class EnumMember:
     def __init__(self):
@@ -338,8 +400,7 @@ class EnumTypeData:
         if not (self.bte & BTE_ALWAYS):
             raise ValueError("Enum bte must have BTE_ALWAYS set")
         mask = self.calc_mask(til)
-        offset = 0
-        lo = 0
+        delta = 0
         hi = 0
         for m in range(N):
             member = EnumMember()
@@ -358,7 +419,8 @@ class EnumTypeData:
                 hi = typestr.read_de()
             if self.bte & BTE_BITFIELD:
                 self.group_sizes.append(typestr.read_dt())
-            member.value = (lo | (hi << 32)) & mask
+            delta += to_s32((lo | (hi << 32)) & mask)
+            member.value = delta
             self.members.append(member)
         return self
 
@@ -376,6 +438,17 @@ class EnumTypeData:
         if bitsize < 64:
             return (1 << bitsize) - 1
         return 0xffffffffffffffff
+
+    def print(self, name):
+        print(f"enum {name}")
+        print("{")
+        out = self.bte & BTE_OUT_MASK
+        for member in self.members:
+            value = member.value
+            if out == BTE_HEX:
+                value = hex(member.value)
+            print(f"  {member.name} = {value}")
+        print("};")
 
 
 class TypedefTypeData:
@@ -401,6 +474,9 @@ class TypedefTypeData:
         else:
             self.name = string
         return self
+
+    def print(self, name):
+        print(f"typedef {self.name} {name};")
 
 
 class BitfieldTypeData:

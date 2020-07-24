@@ -39,20 +39,9 @@ class TypeString:
     def peek(self, n, pos=0):
         return self[pos:pos+n]
 
-    def peek_db(self, pos=0):
-        """ u8 val = *(u8*)ptr """
-        return self[pos]
-
     def read(self, n, pos=0):
         data = self[pos:pos+n]
         self.seek(n)
-        return data
-
-    # TODO: Replace with read_db
-    def read_db(self, pos=0):
-        """ u8 val = *(u8*)ptr++"""
-        data = self[pos]
-        self.seek(1)
         return data
 
     def seek(self, n):
@@ -68,6 +57,16 @@ class TypeString:
     def ref(self):
         """ ptr_ref = &ptr """
         return TypeString(self[0:], parent=self)
+
+    def peek_db(self, pos=0):
+        """ u8 val = *(u8*)ptr """
+        return self[pos]
+
+    def read_db(self, pos=0):
+        """ u8 val = *(u8*)ptr++"""
+        data = self[pos]
+        self.seek(1)
+        return data
 
     def read_dt(self):
         """ Reads 1 to 2 bytes.
@@ -151,7 +150,8 @@ class TypeString:
         return self.peek_db() == dt.TAH_BYTE
 
     def is_sdacl_byte(self):
-        return ((self.peek_db() & 0xCF) ^ 0xC0) <= 1
+        return ((self.peek_db() & ~dt.TYPE_FLAGS_MASK)
+                ^ dt.TYPE_MODIF_MASK) <= dt.BT_VOID
 
     def parse_type_attr(self):
         tah = self.read_db()
@@ -193,7 +193,7 @@ class TypeString:
             typestring += b
             if b == b'\0':
                 break
-        return TypeString(bytes(typestring))
+        return TypeString(typestring)
 
 
 class PStringList:
@@ -456,7 +456,7 @@ class TIL:
 
     def _deserialize_bucket(self, bucket):
         for tdata in bucket.get_types():
-            print(f"Deserializing {tdata.name()}")
+            #print(f"Deserializing {tdata.name()}")
             tinfo = self.deserialize(tdata.typestring(),
                                      tdata.fields(),
                                      tdata.fieldcmts())
@@ -498,7 +498,7 @@ class TIL:
                 typedata = dt.FuncTypeData() \
                     .deserialize(self, typestr, fields, fieldcmts)
             elif base == dt.BT_COMPLEX:
-                if flags == dt.BTMT_STRUCT:
+                if flags == dt.BTMT_STRUCT or flags == dt.BTMT_UNION:
                     typedata = dt.UdtTypeData() \
                         .deserialize(self, typestr, fields, fieldcmts)
                 elif flags == dt.BTMT_ENUM:
@@ -525,10 +525,40 @@ class TIL:
         return self._macros
 
     def get_named_type(self, name, is_type):
+        """
+
+        Args:
+            name: The name of the type
+            is_type: True if this is a type and otherwise for symbols
+
+        Returns: TypeData for the type
+        """
         bucket = self._types if is_type else self._syms
         for typ in bucket.get_types():
             if name == typ.name():
                 return typ
+
+    def get_enums(self):
+        enums = []
+        for tdata in self._types.get_types():
+            tinfo = tdata.get_type_info()
+            typ = tinfo.base_type()
+            base = typ & dt.TYPE_BASE_MASK
+            flags = typ & dt.TYPE_FLAGS_MASK
+            if base == dt.BT_COMPLEX and flags == dt.BTMT_ENUM:
+                enums.append(tdata)
+        return enums
+
+    def get_structs(self):
+        enums = []
+        for tdata in self._types.get_types():
+            tinfo = tdata.get_type_info()
+            typ = tinfo.base_type()
+            base = typ & dt.TYPE_BASE_MASK
+            flags = typ & dt.TYPE_FLAGS_MASK
+            if base == dt.BT_COMPLEX and flags == dt.BTMT_STRUCT:
+                enums.append(tdata)
+        return enums
 
 
 if __name__ == "__main__":
@@ -537,28 +567,9 @@ if __name__ == "__main__":
         exit()
     with open(sys.argv[1], "rb") as fp, open("log.txt", "w") as log:
         til = TIL(fp)
-        print(til.get_named_type("Elf32_Ehdr", True).name())
-        # log.write("Syms:\n")
-        # for t in til.syms().get_types():
-        #     log.write(f"{t.name}\n")
-        # log.write("Types:\n")
-        # for t in til.types().get_types():
-        #     log.write(f"{t.name}\n")
-        # log.write("Macros:\n")
-        # for m in til.macros().get_types():
-        #     log.write(f"{m.name()}\n")
-        # for sym in til.syms().get_types():
-        #     tinfo = sym.get_type_info()
-        #     if tinfo is not None:
-        #         base = tinfo.base_type()
-        #         if base == dt.BTF_TYPEDEF:
-        #             print(f"#define {sym.name()} {sym.ordinal()}")
-        #         elif base == dt.BT_FUNC:
-        #             typedetails = tinfo.typedetails()
-        #             func_name = sym.name()
-        #             ret_type = typedetails.rettype
-        #
-        #             args = "void"
-        #             print(f"{ret_type} {func_name}({args})")
-        #         else:
-        #             print(f"{sym.name()}")
+        for enum in til.get_enums():
+            details = enum.get_type_info().typedetails()
+            details.print(enum.name())
+        for struct in til.get_structs():
+            details = struct.get_type_info().typedetails()
+            details.print(struct.name())
