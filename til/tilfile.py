@@ -7,8 +7,11 @@ from til.utils import *
 
 class TypeString:
     """Representation of `qtype`."""
-    def __init__(self, data, parent=None):
-        self._pos = 0
+    def __init__(self, data=None, pos=0, parent=None):
+        if data is None:
+            data = bytearray()
+        self._offset = pos
+        self._pos = pos
         self._typestring = data
         self._parent = parent
 
@@ -33,8 +36,11 @@ class TypeString:
         self._pos += n
         return self
 
+    def data(self):
+        return self._typestring
+
     def pos(self):
-        return self._pos
+        return self._pos - self._offset
 
     def peek(self, n, pos=0):
         return self[pos:pos+n]
@@ -44,6 +50,9 @@ class TypeString:
         self.seek(n)
         return data
 
+    def append(self, data):
+        self._typestring += data
+
     def seek(self, n):
         """ ptr+=n """
         self._pos += n
@@ -52,11 +61,11 @@ class TypeString:
 
     def get(self):
         """ ptr_copy = ptr """
-        return TypeString(self[0:])
+        return TypeString(self._typestring, self._pos)
 
     def ref(self):
         """ ptr_ref = &ptr """
-        return TypeString(self[0:], parent=self)
+        return TypeString(self._typestring, self._pos, parent=self)
 
     def peek_db(self, pos=0):
         """ u8 val = *(u8*)ptr """
@@ -77,7 +86,7 @@ class TypeString:
         """
         val = self.read_db()
         if val & 0x80:
-            val = (val & 0x7f | self.read_db() << 7)
+            val = ((val & 0x7f) | (self.read_db() << 7))
         return val - 1
 
     def read_de(self):
@@ -100,7 +109,7 @@ class TypeString:
             val = lo | hi
             if not sign:
                 break
-        return to_s32(val)
+        return val
 
     def read_da(self):
         """ Reads 1 to 9 bytes.
@@ -120,6 +129,7 @@ class TypeString:
                 break
             self.seek(1)
             da = (da << 7) | typ & 0x7f
+            b += 1
             if b >= 4:
                 z = self.peek_db()
                 if z != 0:
@@ -145,6 +155,66 @@ class TypeString:
     def read_pstring(self):
         length = self.read_dt()
         return self.read(length).decode("ascii")
+
+    def append_db(self, n):
+        self._typestring.append(n)
+
+    def append_dt(self, n):
+        if n > 0x7ffe:
+            raise ValueError("Value too high for append_dt")
+        lo = n + 1
+        hi = n + 1
+        if lo > 127:
+            self.append_db(lo & 0x7f | 0x80)
+            hi = (lo >> 7) & 0xff
+        self.append_db(hi)
+
+    def append_de(self, n):
+        buf = bytearray()
+        if n & 0xf8000000:
+            buf.append(((n >> 0x1b) & 0x7f) | 0x80)
+            buf.append(((n >> 0x14) & 0x7f) | 0x80)
+            buf.append(((n >> 0xd) & 0x7f) | 0x80)
+            buf.append(((n >> 0x6) & 0x7f) | 0x80)
+        elif n & 0x7f00000:
+            buf.append(((n >> 0x14) & 0x7f) | 0x80)
+            buf.append(((n >> 0xd) & 0x7f) | 0x80)
+            buf.append(((n >> 0x6) & 0x7f) | 0x80)
+        elif n & 0xfe000:
+            buf.append(((n >> 0xd) & 0x7f) | 0x80)
+            buf.append(((n >> 0x6) & 0x7f) | 0x80)
+        elif n & 0x1fc0:
+            buf.append(((n >> 6) & 0x7f) | 0x80)
+        buf.append((n & 0x3f) | 0x40)
+        self.append(buf)
+
+    def append_da(self, n1, n2):
+        buf = bytearray()
+        # Stores 32 bits for n2 and 31 bits for n1
+        buf.append(((n2 >> 0x19) & 0x7f) | 0x80)
+        buf.append(((n2 >> 0x12) & 0x7f) | 0x80)
+        buf.append(((n2 >> 0xb) & 0x7f) | 0x80)
+        buf.append(((n2 >> 0x4) & 0x7f) | 0x80)
+        buf.append(((n1 >> 0x18) & 0x70) | ((n2 >> 0) & 0x0f) | 0x80)
+        buf.append(((n1 >> 0x15) & 0x7f) | 0x80)
+        buf.append(((n1 >> 0xe) & 0x7f) | 0x80)
+        buf.append(((n1 >> 0x7) & 0x7f) | 0x80)
+        buf.append((n1 & 0x7f) | 0x80)
+        self._typestring += buf
+
+    def append_complex_n(self, n, is_empty):
+        buf = bytearray()
+        if n < 0x7ffe and is_empty == False:
+            self.append_dt(n)
+        else:
+            self.append_db(0xff)
+            self.append_db(0xff)
+            self.append_de(n)
+
+    def append_pstring(self, string):
+        l = len(string)
+        self.append_dt(l)
+        self.append(string.encode("ascii"))
 
     def is_tah_byte(self):
         return self.peek_db() == dt.TAH_BYTE
@@ -184,7 +254,6 @@ class TypeString:
         if self.is_sdacl_byte():
             return self.read_type_attr()
 
-
     @staticmethod
     def read_typestring(stream):
         typestring = bytearray()
@@ -196,64 +265,6 @@ class TypeString:
         return TypeString(typestring)
 
 
-class PStringList:
-    """List of pascal-like strings.
-
-    p_string: dt length, db characters
-    p_list: one or more p_strings
-
-    Args:
-        data (bytes): null terminated p_list bytes
-    """
-    def __init__(self, data):
-        self._pos = 0
-        self._data = data
-
-    def seek(self, n):
-        """ ptr+=n """
-        self._pos += n
-        if self._parent is not None:
-            self._parent.seek(n)
-
-    def read(self, n, pos=0):
-        data = self[pos:pos+n]
-        self.seek(n)
-        return data
-
-    # TODO: Replace with read_db
-    def read_db(self, pos=0):
-        """ u8 val = *(u8*)ptr++"""
-        data = self[pos]
-        self.seek(1)
-        return data
-
-    def read_dt(self):
-        """ Reads 1 to 2 bytes.
-
-        Value Range: 0-0xFFFE
-        Usage: 16bit numbers
-        :return: int
-        """
-        val = self.read_db()
-        if val & 0x80:
-            val = (val & 0x7f | self.read_db() << 7)
-        return val - 1
-
-    def read_pstring(self):
-        length = self.read_dt()
-        return self.read(length).decode("ascii")
-
-    @staticmethod
-    def read_p_list(stream):
-        p_list = bytearray()
-        while True:
-            b = stream.read(1)
-            p_list += b
-            if b == b'\0':
-                break
-        return PStringList(bytes(p_list))
-
-
 class TypeInfo:
     """Representation of tinfo_t."""
     def __init__(self, base_type=dt.BT_UNK):
@@ -261,10 +272,10 @@ class TypeInfo:
         self._flags = 0
         self._typedetails = 0
 
-    def base_type(self):
+    def get_base_type(self):
         return self._base_type
 
-    def typedetails(self):
+    def get_type_details(self):
         return self._typedetails
 
     @staticmethod
@@ -291,29 +302,32 @@ class TypeData:
 
         self._typestr = TypeString.read_typestring(self._stream)
         self._cmt = cstring(self._stream)
-        self._fields = self._parse_plist()
-        self._fieldcmts = self._parse_plist()
+        # TODO: Use typestrings
+        self._fields = TypeString.read_typestring(self._stream)
+        self._fieldcmts = TypeString.read_typestring(self._stream)
+        # self._fields = self._parse_plist()
+        # self._fieldcmts = self._parse_plist()
         self._sclass = u8(self._stream)
 
     def __repr__(self):
-        return self.name()
+        return self.get_name()
 
-    def name(self):
+    def get_name(self):
         return self._name.decode("ascii")
 
-    def ordinal(self):
+    def get_ordinal(self):
         return self._ordinal
 
-    def typestring(self):
+    def get_type_string(self):
         return self._typestr
 
-    def fields(self):
+    def get_fields(self):
         return self._fields
 
-    def fieldcmts(self):
+    def get_field_cmts(self):
         return self._fieldcmts
 
-    def comment(self):
+    def get_comment(self):
         return self._cmt
 
     def set_type_info(self, tinfo):
@@ -342,7 +356,7 @@ class Macro:
         self._isfunc = u8(stream)
         self._value = cstring(stream)
 
-    def name(self):
+    def get_name(self):
         return self._name.decode("ascii")
 
 
@@ -456,10 +470,9 @@ class TIL:
 
     def _deserialize_bucket(self, bucket):
         for tdata in bucket.get_types():
-            #print(f"Deserializing {tdata.name()}")
-            tinfo = self.deserialize(tdata.typestring(),
-                                     tdata.fields(),
-                                     tdata.fieldcmts())
+            tinfo = self.deserialize(tdata.get_type_string(),
+                                     tdata.get_fields(),
+                                     tdata.get_field_cmts())
             if tinfo is not None:
                 self._typeinfos.append(tinfo)
                 tdata.set_type_info(tinfo)
@@ -512,20 +525,35 @@ class TIL:
                     .deserialize(self, typestr, fields, fieldcmts)
             return TypeInfo.create_type_info(typ, typedata)
 
-    def header(self):
+    def serialize(self, tinfo, typestr):
+        typ = tinfo.get_base_type()
+        base = typ & dt.TYPE_BASE_MASK
+        flags = typ & dt.TYPE_FLAGS_MASK
+        mod = typ & dt.TYPE_MODIF_MASK
+
+        if base <= dt.BT_LAST_BASIC:
+            typestr.append_db(typ)
+            return
+
+        if base > dt.BT_LAST_BASIC:
+            details = tinfo.get_type_details()
+            if details is not None:
+                details.serialize(self, tinfo, typestr)
+
+    def get_header(self):
         return self._header
 
-    def syms(self):
+    def get_syms(self):
         return self._syms
 
-    def types(self):
+    def get_types(self):
         return self._types
 
-    def macros(self):
+    def get_macros(self):
         return self._macros
 
     def get_named_type(self, name, is_type):
-        """
+        """ Get a type by its name.
 
         Args:
             name: The name of the type
@@ -535,14 +563,14 @@ class TIL:
         """
         bucket = self._types if is_type else self._syms
         for typ in bucket.get_types():
-            if name == typ.name():
+            if name == typ.get_name():
                 return typ
 
     def get_enums(self):
         enums = []
         for tdata in self._types.get_types():
             tinfo = tdata.get_type_info()
-            typ = tinfo.base_type()
+            typ = tinfo.get_base_type()
             base = typ & dt.TYPE_BASE_MASK
             flags = typ & dt.TYPE_FLAGS_MASK
             if base == dt.BT_COMPLEX and flags == dt.BTMT_ENUM:
@@ -553,7 +581,7 @@ class TIL:
         enums = []
         for tdata in self._types.get_types():
             tinfo = tdata.get_type_info()
-            typ = tinfo.base_type()
+            typ = tinfo.get_base_type()
             base = typ & dt.TYPE_BASE_MASK
             flags = typ & dt.TYPE_FLAGS_MASK
             if base == dt.BT_COMPLEX and flags == dt.BTMT_STRUCT:
@@ -561,15 +589,42 @@ class TIL:
         return enums
 
 
+def dump(til_name):
+    with open(til_name, "rb") as fp:
+        print(f"Loading {til_name}...")
+        til = TIL(fp)
+        print(f"Finished Loading.")
+
+        # Print out enums and structs
+        for enum in til.get_enums():
+            details = enum.get_type_info().get_type_details()
+            details.print(enum.get_name())
+        for struct in til.get_structs():
+            details = struct.get_type_info().get_type_details()
+            details.print(struct.get_name())
+
+        typedata = til.get_named_type("$160641F2D897670075418D2E6B733231", True)
+        tinfo = typedata.get_type_info()
+        typedetails = tinfo.get_type_details()
+        expected_serialized = typedata.get_type_string().data()
+        generated_typestring = TypeString()
+        generated_fields = TypeString()
+        generated_fieldcmts = TypeString()
+        typedetails.serialize(til, tinfo, generated_typestring,
+                              generated_fields, generated_fieldcmts)
+        generated_serialized = generated_typestring.data() + b'\0'
+        print(generated_fields.data() + b'\0')
+        print("Expected: ", expected_serialized.hex())
+        print("Actual:   ", generated_serialized.hex())
+        if generated_serialized == expected_serialized:
+            print("Pass")
+        else:
+            print("Fail")
+
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print(f"Usage {sys.argv[0]} <til file>")
         exit()
-    with open(sys.argv[1], "rb") as fp, open("log.txt", "w") as log:
-        til = TIL(fp)
-        for enum in til.get_enums():
-            details = enum.get_type_info().typedetails()
-            details.print(enum.name())
-        for struct in til.get_structs():
-            details = struct.get_type_info().typedetails()
-            details.print(struct.name())
+    dump(sys.argv[1])
