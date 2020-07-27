@@ -29,7 +29,3 @@ def cstring(stream):
             return s
         s += b
 
-
-def pstring(stream):
-    length = u8(stream)
-    return stream.read(length).decode("ascii")

@@ -20,7 +20,7 @@ class TypeString:
         if isinstance(x, slice):
             if x.step is not None:
                 raise NotImplementedError(
-                    "Typestring slice does not handle stepping")
+                    "Type string slice does not handle stepping")
             if x.stop is None:
                 return self._typestring[self._pos + x.start:]
             else:
@@ -203,8 +203,7 @@ class TypeString:
         self._typestring += buf
 
     def append_complex_n(self, n, is_empty):
-        buf = bytearray()
-        if n < 0x7ffe and is_empty == False:
+        if n < 0x7ffe and is_empty is False:
             self.append_dt(n)
         else:
             self.append_db(0xff)
@@ -212,8 +211,7 @@ class TypeString:
             self.append_de(n)
 
     def append_pstring(self, string):
-        l = len(string)
-        self.append_dt(l)
+        self.append_dt(len(string))
         self.append(string.encode("ascii"))
 
     def is_tah_byte(self):
@@ -302,11 +300,8 @@ class TypeData:
 
         self._typestr = TypeString.read_typestring(self._stream)
         self._cmt = cstring(self._stream)
-        # TODO: Use typestrings
         self._fields = TypeString.read_typestring(self._stream)
         self._fieldcmts = TypeString.read_typestring(self._stream)
-        # self._fields = self._parse_plist()
-        # self._fieldcmts = self._parse_plist()
         self._sclass = u8(self._stream)
 
     def __repr__(self):
@@ -336,14 +331,6 @@ class TypeData:
     def get_type_info(self):
         return self._tinfo
 
-    def _parse_plist(self):
-        p_list = []
-        length = u8(self._stream)
-        while length != 0:
-            p_list.append(self._stream.read(length - 1).decode("ascii"))
-            length = u8(self._stream)
-        return p_list
-
 
 class Macro:
     """Represents a macro loaded from a bucket.
@@ -360,26 +347,6 @@ class Macro:
         return self._name.decode("ascii")
 
 
-class TILBucket:
-    """Handle's unpacking a single TIL bucket."""
-    def __init__(self, flags, stream):
-        self.types = []
-        self.ndefs = u32(stream)    # Number of definitions
-        self.size = u32(stream)     # Size of uncompressed buffer
-        self.buffer = None          # Buffer
-        if flags & 0x1:
-            csize = u32(stream)
-            self.buffer = zlib.decompress(stream.read(csize))
-        else:
-            self.buffer = stream.read(self.size)
-
-    def add_type(self, t):
-        self.types.append(t)
-
-    def get_types(self):
-        return self.types
-
-
 # TIL values for `flags`
 TIL_ZIP = 0x0001
 TIL_MAC = 0x0002
@@ -390,6 +357,30 @@ TIL_ALI = 0x0020
 TIL_MOD = 0x0040
 TIL_STM = 0x0080
 TIL_SLD = 0x0100
+
+
+class TILBucket:
+    """Handle's unpacking a single TIL bucket."""
+    def __init__(self, flags, stream):
+        self.types = []
+        if flags & TIL_ORD:
+            self.nords = u32(stream)    # Number of ordinals
+
+        self.ndefs = u32(stream)    # Number of definitions
+        self.size = u32(stream)     # Size of uncompressed buffer
+        self.buffer = None          # Buffer
+
+        if flags & TIL_ZIP:
+            csize = u32(stream)
+            self.buffer = zlib.decompress(stream.read(csize))
+        else:
+            self.buffer = stream.read(self.size)
+
+    def add_type(self, t):
+        self.types.append(t)
+
+    def get_types(self):
+        return self.types
 
 
 class TILHeader:
@@ -436,34 +427,24 @@ class TIL:
 
     def _read_buckets(self):
         """Read each bucket."""
-        self._syms = self._read_bucket()
-        self._types = self._read_bucket()
-        self._macros = self._read_bucket()
+        self._syms = TILBucket(self._header.flag & 0xCF, self._stream)
+        self._types = TILBucket(self._header.flag, self._stream)
+        self._macros = TILBucket(self._header.flag & 0xCF, self._stream)
         self._load_bucket(self._syms)
         self._load_bucket(self._types)
         self._load_macros(self._macros)
         self._process_bucket(self._syms)
         self._process_bucket(self._types)
 
-    def _read_bucket(self):
-        """Read a single bucket."""
-        return TILBucket(self._header.flag, self._stream)
-
-    def _read_type(self, stream):
-        return TypeData(stream)
-
-    def _read_macro(self, stream):
-        return Macro(stream)
-
     def _load_bucket(self, bucket):
         buffer = io.BytesIO(bucket.buffer)
         for _ in range(bucket.ndefs):
-            bucket.add_type(self._read_type(buffer))
+            bucket.add_type(TypeData(buffer))
 
     def _load_macros(self, bucket):
         buffer = io.BytesIO(bucket.buffer)
         for _ in range(bucket.ndefs):
-            bucket.add_type(self._read_macro(buffer))
+            bucket.add_type(Macro(buffer))
 
     def _process_bucket(self, bucket):
         self._deserialize_bucket(bucket)
@@ -603,24 +584,25 @@ def dump(til_name):
             details = struct.get_type_info().get_type_details()
             details.print(struct.get_name())
 
-        typedata = til.get_named_type("$160641F2D897670075418D2E6B733231", True)
-        tinfo = typedata.get_type_info()
-        typedetails = tinfo.get_type_details()
-        expected_serialized = typedata.get_type_string().data()
-        generated_typestring = TypeString()
-        generated_fields = TypeString()
-        generated_fieldcmts = TypeString()
-        typedetails.serialize(til, tinfo, generated_typestring,
-                              generated_fields, generated_fieldcmts)
-        generated_serialized = generated_typestring.data() + b'\0'
-        print(generated_fields.data() + b'\0')
-        print("Expected: ", expected_serialized.hex())
-        print("Actual:   ", generated_serialized.hex())
-        if generated_serialized == expected_serialized:
-            print("Pass")
-        else:
-            print("Fail")
-
+        # Elf32_Ehdr (gnuunx.til) serialization test
+        # typedata = til.get_named_type(
+        #     "$160641F2D897670075418D2E6B733231", True)
+        # tinfo = typedata.get_type_info()
+        # typedetails = tinfo.get_type_details()
+        # expected_serialized = typedata.get_type_string().data()
+        # generated_typestring = TypeString()
+        # generated_fields = TypeString()
+        # generated_fieldcmts = TypeString()
+        # typedetails.serialize(til, tinfo, generated_typestring,
+        #                       generated_fields, generated_fieldcmts)
+        # generated_serialized = generated_typestring.data() + b'\0'
+        # print(generated_fields.data() + b'\0')
+        # print("Expected: ", expected_serialized.hex())
+        # print("Actual:   ", generated_serialized.hex())
+        # if generated_serialized == expected_serialized:
+        #     print("Pass")
+        # else:
+        #     print("Fail")
 
 
 if __name__ == "__main__":

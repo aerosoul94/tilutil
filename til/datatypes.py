@@ -214,6 +214,27 @@ class ArrayTypeData:
         til.serialize(self.elem_type, typestr)
 
 
+ALOC_NONE = 0
+ALOC_STACK = 1
+ALOC_DIST = 2
+ALOC_REG1 = 3
+ALOC_REG2 = 4
+ALOC_RREL = 5
+ALOC_STATIC = 6
+ALOC_CUSTOM = 7
+
+
+class ArgLoc:
+    def __init__(self):
+        self.type = 0
+
+
+class RegInfo:
+    def __init__(self):
+        self.reg = 0
+        self.size = 0
+
+
 class FuncArg:
     def __init__(self):
         self.argloc = None  # argloc_t
@@ -241,7 +262,34 @@ class FuncTypeData:
 
         cm = typestr.read_db()
         if (cm & CM_CC_MASK) == CM_CC_SPOILED:
-            pass
+            # TODO: UNTESTED
+            raise NotImplementedError(
+                "Spoiled register parsing has not been tested.")
+
+            flags = 0
+            while True:
+                if (cm & ~CM_CC_MASK) == 15:
+                    f = 2 * (typestr.read_db() & 0x1f)
+                else:
+                    nspoiled = cm & ~CM_CC_MASK
+                    for n in range(nspoiled):
+                        reginfo = RegInfo()
+                        b = typestr.read_db()
+                        if bool(b & 0x80):
+                            size = typestr.read_db()
+                            reg = b & 0x7f
+                        else:
+                            size = (b >> 4) + 1
+                            reg = (b & 0xf) - 1
+                        reginfo.size = size
+                        reginfo.reg = reg
+                        self.spoiled.append(reginfo)
+                    f = 1
+                cm = typestr.peek_db()
+                flags |= f
+                if (cm & CM_CC_MASK) != CM_CC_SPOILED:
+                    break
+            self.flags = flags
         else:
             self.flags = 0
         self.cc = cm
@@ -249,9 +297,9 @@ class FuncTypeData:
         typestr.read_type_attr()
         self.rettype = til.deserialize(typestr.ref(), fields, fieldcmts)
         cc = self.cc & CM_CC_MASK
-        if cc == CM_CC_SPECIALE or cc == CM_CC_SPECIALP or cc == CM_CC_SPECIAL:
-            if (self.rettype.get_base_type() & TYPE_FULL_MASK) == 1:
-                self.retloc = self.deserialize_argloc(typestr.get())
+        if cc > CM_CC_SPECIALE:
+            if (self.rettype.get_base_type() & TYPE_FULL_MASK) != BT_VOID:
+                self.retloc = self.extract_argloc(typestr)
         if cc != CM_CC_VOIDARG:
             N = typestr.read_dt()
             if N > 256:
@@ -261,21 +309,48 @@ class FuncTypeData:
                     arg = FuncArg()
                     if fields is not None:
                         arg.name = fields.read_pstring()
+                    if fieldcmts is not None:
+                        arg.cmt = fields.read_pstring()
                     fah = typestr.peek_db()
                     if fah == FAH_BYTE:
                         typestr.seek(1)
                         arg.flags = typestr.read_de()
                     arg.type = til.deserialize(typestr.ref(),
                                                fields, fieldcmts)
-                    if self.cc == CM_CC_SPECIALE or \
-                        self.cc == CM_CC_SPECIALP or \
-                            self.cc == CM_CC_SPECIAL:
-                        arg.argloc = self.deserialize_argloc(typestr.get())
+                    if cc > CM_CC_SPECIALE:
+                        arg.argloc = self.extract_argloc(typestr)
                     self.args.append(arg)
         return self
 
-    def deserialize_argloc(self, typestr):
-        raise NotImplementedError("extract_argloc() not implemented.")
+    def extract_argloc(self, typestr):
+        # TODO: UNTESTED
+        raise NotImplementedError("Argloc parsing has not been tested yet.")
+
+        b = typestr.read_db()
+        if b != 0xff:
+            return
+        argloc = ArgLoc()
+        argloc.type = typestr.read_dt()
+        if argloc.type == ALOC_STACK:
+            # fills sval
+            typestr.read_de()   # sval
+        elif argloc.type == ALOC_DIST:
+            pass
+        elif argloc.type in (ALOC_REG1, ALOC_REG2):
+            # fills reginfo (offset and register ndx)
+            typestr.read_dt()   # reginfo
+            typestr.read_dt()   # reginfo << 16
+        elif argloc.type == ALOC_RREL:
+            # fills rrel
+            typestr.read_dt()   # rrel_t->reg
+            typestr.read_de()   # rrel_t->off
+        elif argloc.type == ALOC_STATIC:
+            # fills sval
+            typestr.read_de()
+        return argloc
+
+    def extract_reginfo(self, typestr):
+        cm = typestr.peek_db()
 
     def serialize(self, til, tinfo, typestr):
         typ = tinfo.get_base_type()
