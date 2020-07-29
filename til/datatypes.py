@@ -161,11 +161,15 @@ class PointerTypeData:
             # Next byte MUST be RESERVED_BYTE
             if ptr_size == RESERVED_BYTE:
                 # and after it ::BT_FUNC
-                self.closure = til.deserialize(typestr.ref())
+                self.closure = til.deserialize(typestr.ref(),
+                                               fields.ref(),
+                                               fieldcmts.ref())
             else:
                 self.based_ptr_size = typestr.read_db()
         self.taptr_bits = typestr.read_type_attr()
-        self.obj_type = til.deserialize(typestr.ref(), fields, fieldcmts)
+        self.obj_type = til.deserialize(typestr.ref(),
+                                        fields.ref(),
+                                        fieldcmts.ref())
         return self
 
     def serialize(self, til, tinfo, typestr):
@@ -197,7 +201,9 @@ class ArrayTypeData:
             self.nelems = typestr.read_dt()
         else:
             _, self.nelems, self.base = typestr.read_da()
-        self.elem_type = til.deserialize(typestr.ref(), fields, fieldcmts)
+        self.elem_type = til.deserialize(typestr.ref(),
+                                         fields.ref(),
+                                         fieldcmts.ref())
         return self
 
     def serialize(self, til, tinfo, typestr):
@@ -247,7 +253,7 @@ class FuncArg:
 class FuncTypeData:
     def __init__(self):
         self.args = []
-        self.flags = 0
+        self.flags = 0          # FTI_*
         self.rettype = None     # tinfo_t
         self.retloc = None      # argloc_t
         self.stkargs = None     # uval_t
@@ -260,14 +266,15 @@ class FuncTypeData:
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
 
-        cm = typestr.read_db()
+        cm = typestr.peek_db()
         if (cm & CM_CC_MASK) == CM_CC_SPOILED:
             # TODO: UNTESTED
-            raise NotImplementedError(
-                "Spoiled register parsing has not been tested.")
+            # raise NotImplementedError(
+            #     "Spoiled register parsing has not been tested.")
 
             flags = 0
             while True:
+                typestr.seek(1)
                 if (cm & ~CM_CC_MASK) == 15:
                     f = 2 * (typestr.read_db() & 0x1f)
                 else:
@@ -286,16 +293,17 @@ class FuncTypeData:
                         self.spoiled.append(reginfo)
                     f = 1
                 cm = typestr.peek_db()
-                flags |= f
+                self.flags |= f
                 if (cm & CM_CC_MASK) != CM_CC_SPOILED:
                     break
-            self.flags = flags
         else:
             self.flags = 0
-        self.cc = cm
+        self.cc = typestr.read_db()
         self.flags |= 4 * flags
         typestr.read_type_attr()
-        self.rettype = til.deserialize(typestr.ref(), fields, fieldcmts)
+        self.rettype = til.deserialize(typestr.ref(),
+                                       fields.ref(),
+                                       fieldcmts.ref())
         cc = self.cc & CM_CC_MASK
         if cc > CM_CC_SPECIALE:
             if (self.rettype.get_base_type() & TYPE_FULL_MASK) != BT_VOID:
@@ -308,15 +316,16 @@ class FuncTypeData:
                 for n in range(N):
                     arg = FuncArg()
                     if fields is not None:
-                        arg.name = fields.read_pstring()
+                        arg.name = fields.read_pstring().decode("ascii")
                     if fieldcmts is not None:
-                        arg.cmt = fields.read_pstring()
+                        arg.cmt = fieldcmts.read_pstring().decode("ascii")
                     fah = typestr.peek_db()
                     if fah == FAH_BYTE:
                         typestr.seek(1)
                         arg.flags = typestr.read_de()
                     arg.type = til.deserialize(typestr.ref(),
-                                               fields, fieldcmts)
+                                               fields.ref(),
+                                               fieldcmts.ref())
                     if cc > CM_CC_SPECIALE:
                         arg.argloc = self.extract_argloc(typestr)
                     self.args.append(arg)
@@ -324,29 +333,45 @@ class FuncTypeData:
 
     def extract_argloc(self, typestr):
         # TODO: UNTESTED
-        raise NotImplementedError("Argloc parsing has not been tested yet.")
+        # raise NotImplementedError("Argloc parsing has not been tested yet.")
 
-        b = typestr.read_db()
-        if b != 0xff:
-            return
         argloc = ArgLoc()
-        argloc.type = typestr.read_dt()
-        if argloc.type == ALOC_STACK:
-            # fills sval
-            typestr.read_de()   # sval
-        elif argloc.type == ALOC_DIST:
-            pass
-        elif argloc.type in (ALOC_REG1, ALOC_REG2):
-            # fills reginfo (offset and register ndx)
-            typestr.read_dt()   # reginfo
-            typestr.read_dt()   # reginfo << 16
-        elif argloc.type == ALOC_RREL:
-            # fills rrel
-            typestr.read_dt()   # rrel_t->reg
-            typestr.read_de()   # rrel_t->off
-        elif argloc.type == ALOC_STATIC:
-            # fills sval
-            typestr.read_de()
+        a = typestr.read_db()
+        if a == 0xff:
+            argloc.type = typestr.read_dt()
+            if argloc.type == ALOC_STACK:
+                # fills sval
+                typestr.read_de()   # sval
+            elif argloc.type == ALOC_DIST:
+                pass
+            elif argloc.type in (ALOC_REG1, ALOC_REG2):
+                # fills reginfo (offset and register ndx)
+                typestr.read_dt()   # reginfo
+                typestr.read_dt()   # reginfo << 16
+            elif argloc.type == ALOC_RREL:
+                # fills rrel
+                typestr.read_dt()   # rrel_t->reg
+                typestr.read_de()   # rrel_t->off
+            elif argloc.type == ALOC_STATIC:
+                # fills sval
+                typestr.read_de()
+        else:
+            b = (a & 0x7f) - 1
+            if b <= 0x80:
+                if b & 0x7f:
+                    # argloc.type = ALLOC_REG1
+                    # argloc.sval = b
+                    pass
+                else:
+                    # argloc.type = ALLOC_STACK
+                    # argloc.sval = 0
+                    pass
+            else:
+                c = typestr.read_db() - 1
+                if c != -1:
+                    # argloc.type = ALLOC_REG2
+                    # argloc.reginfo = b | (c << 16)
+                    pass
         return argloc
 
     def extract_reginfo(self, typestr):
@@ -476,12 +501,12 @@ class UdtTypeData:
         for n in range(mcnt):
             member = UdtMember()
             if fields is not None:
-                member.name = fields.read_pstring()
+                member.name = fields.read_pstring().decode("ascii")
             if fieldcmts is not None:
                 member.cmt = fieldcmts.read_pstring()
             member.type = til.deserialize(typestr.ref(),
-                                          fields,
-                                          fieldcmts)
+                                          fields.ref(),
+                                          fieldcmts.ref())
             attr = typestr.read_sdacl_attr()
             if attr is not None:
                 member.tafld_bits = attr
@@ -552,9 +577,9 @@ class EnumTypeData:
         for m in range(N):
             member = EnumMember()
             if fields is not None:
-                member.name = fields.read_pstring()
+                member.name = fields.read_pstring().decode("ascii")
             if fieldcmts is not None:
-                member.cmt = fieldcmts.read_pstring()
+                member.cmt = fieldcmts.read_pstring().decode("ascii")
             lo = typestr.read_de()
             if self.taenum_bits & TAENUM_64BIT:
                 hi = typestr.read_de()
@@ -626,11 +651,11 @@ class TypedefTypeData:
 
         self.til = til
         string = typestr.read_pstring()
-        if len(string) > 1 and string[0] == "#":
+        if len(string) > 1 and string[0] == b"#":
             self.is_ordref = True
             self.name = string
         else:
-            self.name = string
+            self.name = string.decode("ascii")
         return self
 
     def serialize(self, til, tinfo, typestr):

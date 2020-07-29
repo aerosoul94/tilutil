@@ -154,7 +154,7 @@ class TypeString:
 
     def read_pstring(self):
         length = self.read_dt()
-        return self.read(length).decode("ascii")
+        return self.read(length)
 
     def append_db(self, n):
         self._typestring.append(n)
@@ -285,17 +285,24 @@ class TypeInfo:
 
 class TypeData:
     """Represents the serialized type data"""
-    def __init__(self, stream):
+    def __init__(self, stream, format):
         self._stream = stream
         self._type = 0              # BT_UNK
         self._tinfo = None      # Should be filled in by deserialize
-        self._read()
+        self._read(format)
 
-    def _read(self):
+    def _read(self, format):
         self._flags = u32(self._stream)
         self._name = cstring(self._stream)
+        if self._flags not in (0x7fffffff, 0xffffffff):
+            raise ValueError("Invalid flags")
+
+        # Format below 0x12 does not have 64 bit ordinal's
+        if format < 0x12:
+            self._flags &= 0x7fffffff
+
         # For symbols, this is the value
-        self._ordinal = u64(self._stream) if self._flags >> 32 \
+        self._ordinal = u64(self._stream) if bool(self._flags >> 31) \
             else u32(self._stream)
 
         self._typestr = TypeString.read_typestring(self._stream)
@@ -439,7 +446,7 @@ class TIL:
     def _load_bucket(self, bucket):
         buffer = io.BytesIO(bucket.buffer)
         for _ in range(bucket.ndefs):
-            bucket.add_type(TypeData(buffer))
+            bucket.add_type(TypeData(buffer, self._header.form))
 
     def _load_macros(self, bucket):
         buffer = io.BytesIO(bucket.buffer)
@@ -476,7 +483,7 @@ class TIL:
                 N = t.read_complex_n()
                 if N == 0:
                     typedata = dt.TypedefTypeData()
-                    typedata.name = t.read_pstring()
+                    typedata.name = t.read_pstring().decode("ascii")
                     # I don't like this, we're going to need to come up with a
                     # way to do this automatically
                     typestr.seek(t.pos())
@@ -610,3 +617,4 @@ if __name__ == "__main__":
         print(f"Usage {sys.argv[0]} <til file>")
         exit()
     dump(sys.argv[1])
+
