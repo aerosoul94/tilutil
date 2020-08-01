@@ -142,6 +142,59 @@ CM_CC_SPECIALP = 0xE0
 CM_CC_SPECIAL = 0xF0
 
 
+def print_type(tinfo, name):
+    typ = tinfo.get_real_type()
+    base = typ & TYPE_BASE_MASK
+    flags = typ & TYPE_FLAGS_MASK
+    mod = typ & TYPE_MODIF_MASK
+    res = ""
+    if mod & BTM_CONST:
+        res += "const "
+    if mod & BTM_VOLATILE:
+        res += "volatile "
+    if base <= BT_LAST_BASIC:
+        if base == BT_VOID:
+            return "void"
+        elif base <= BT_INT:
+            if flags & BTMT_SIGNED:
+                res += "signed "
+            elif flags & BTMT_UNSIGNED:
+                res += "unsigned "
+            elif flags & BTMT_CHAR:
+                return res + "char"
+            if base == BT_INT8:
+                return res + "__int8"
+            elif base == BT_INT16:
+                return res + "__int16"
+            elif base == BT_INT32:
+                return res + "__int32"
+            elif base == BT_INT64:
+                return res + "__int64"
+            elif base == BT_INT128:
+                return res + "__int128"
+            elif base == BT_INT:
+                return res + "int"
+        elif base == BT_BOOL:
+            if flags == BTMT_BOOL1:
+                return "_BOOL1"
+            elif flags == BTMT_BOOL2:
+                return "_BOOL2"
+            elif flags == BTMT_BOOL4:
+                return "_BOOL4"
+            else:
+                return "bool"
+        elif base == BT_FLOAT:
+            if flags == BTMT_FLOAT:
+                return "float"
+            elif flags == BTMT_DOUBLE:
+                return "double"
+            elif flags == BTMT_LNGDBL:
+                return "long double"
+    elif base > BT_LAST_BASIC:
+        details = tinfo.get_type_details()
+        return details.print(name)
+
+
 class PointerTypeData:
     """Representation of ptr_type_data_t"""
     def __init__(self):
@@ -161,26 +214,44 @@ class PointerTypeData:
             # Next byte MUST be RESERVED_BYTE
             if ptr_size == RESERVED_BYTE:
                 # and after it ::BT_FUNC
-                self.closure = til.deserialize(typestr.ref(),
-                                               fields.ref(),
-                                               fieldcmts.ref())
+                self.closure = til.deserialize(typestr,
+                                               fields,
+                                               fieldcmts)
             else:
                 self.based_ptr_size = typestr.read_db()
         self.taptr_bits = typestr.read_type_attr()
-        self.obj_type = til.deserialize(typestr.ref(),
-                                        fields.ref(),
-                                        fieldcmts.ref())
+        self.obj_type = til.deserialize(typestr,
+                                        fields,
+                                        fieldcmts)
         return self
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_base_type()
+        typ = tinfo.get_real_type()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
 
         # append type byte
         typestr.append_db(typ)
-        til.serialize(self.obj_type, typestr.ref())
+        til.serialize(self.obj_type, typestr)
+
+    def print(self, name):
+        elemtype = self.obj_type
+        if elemtype.is_func():
+            details = elemtype.get_type_details()
+            rettype = print_type(details.rettype, "")
+            args = ""
+            for n, arg in enumerate(details.args):
+                args += print_type(arg.type, "")
+                if arg.name:
+                    args += " " + arg.name
+                if n != len(details.args) - 1:
+                    args += ", "
+            return f"{rettype} (* {name})({args})"
+        basetype = print_type(elemtype, "")
+        if name:
+            return f"{basetype}* {name}"
+        return f"{basetype}*"
 
 
 class ArrayTypeData:
@@ -201,13 +272,13 @@ class ArrayTypeData:
             self.nelems = typestr.read_dt()
         else:
             _, self.nelems, self.base = typestr.read_da()
-        self.elem_type = til.deserialize(typestr.ref(),
-                                         fields.ref(),
-                                         fieldcmts.ref())
+        self.elem_type = til.deserialize(typestr,
+                                         fields,
+                                         fieldcmts)
         return self
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_base_type()
+        typ = tinfo.get_real_type()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
@@ -218,6 +289,16 @@ class ArrayTypeData:
         else:
             typestr.append_da(self.nelems, self.base)
         til.serialize(self.elem_type, typestr)
+
+    def print(self, name):
+        elem_type = self.elem_type
+        array = f"[{self.nelems}]"
+        while elem_type.is_array():
+            details = elem_type.get_type_details()
+            array += f"[{details.nelems}]"
+            elem_type = details.elem_type
+        basetype = print_type(elem_type, "")
+        return f"{basetype} {name}{array}"
 
 
 ALOC_NONE = 0
@@ -301,12 +382,12 @@ class FuncTypeData:
         self.cc = typestr.read_db()
         self.flags |= 4 * flags
         typestr.read_type_attr()
-        self.rettype = til.deserialize(typestr.ref(),
-                                       fields.ref(),
-                                       fieldcmts.ref())
+        self.rettype = til.deserialize(typestr,
+                                       fields,
+                                       fieldcmts)
         cc = self.cc & CM_CC_MASK
         if cc > CM_CC_SPECIALE:
-            if (self.rettype.get_base_type() & TYPE_FULL_MASK) != BT_VOID:
+            if (self.rettype.get_real_type() & TYPE_FULL_MASK) != BT_VOID:
                 self.retloc = self.extract_argloc(typestr)
         if cc != CM_CC_VOIDARG:
             N = typestr.read_dt()
@@ -323,9 +404,9 @@ class FuncTypeData:
                     if fah == FAH_BYTE:
                         typestr.seek(1)
                         arg.flags = typestr.read_de()
-                    arg.type = til.deserialize(typestr.ref(),
-                                               fields.ref(),
-                                               fieldcmts.ref())
+                    arg.type = til.deserialize(typestr,
+                                               fields,
+                                               fieldcmts)
                     if cc > CM_CC_SPECIALE:
                         arg.argloc = self.extract_argloc(typestr)
                     self.args.append(arg)
@@ -378,7 +459,7 @@ class FuncTypeData:
         cm = typestr.peek_db()
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_base_type()
+        typ = tinfo.get_real_type()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
@@ -391,6 +472,17 @@ class FuncTypeData:
         for arg in self.args:
             til.serialize(arg.type, typestr)
 
+    def print(self, name):
+        rettype = print_type(self.rettype, "")
+        args = ""
+        for n, arg in enumerate(self.args):
+            args += print_type(arg.type, "")
+            if arg.name:
+                args += " " + arg.name
+            if n != len(self.args) - 1:
+                args += ", "
+        return f"{rettype} {name}({args})"
+
 
 class UdtMember:
     def __init__(self):
@@ -402,72 +494,6 @@ class UdtMember:
         self.effalign = 0
         self.tafld_bits = 0
         self.fda = 0
-
-
-def get_name_for_type(tinfo):
-    typ = tinfo.get_base_type()
-    base = typ & TYPE_BASE_MASK
-    flags = typ & TYPE_FLAGS_MASK
-    mod = typ & TYPE_MODIF_MASK
-    res = ""
-    if mod & BTM_CONST:
-        res += "const "
-    if mod & BTM_VOLATILE:
-        res += "volatile "
-    if base <= BT_LAST_BASIC:
-        if base == BT_VOID:
-            return "void"
-        elif base <= BT_INT:
-            if flags & BTMT_SIGNED:
-                res += "signed "
-            elif flags & BTMT_UNSIGNED:
-                res += "unsigned "
-            elif flags & BTMT_CHAR:
-                return res + "char"
-            if base == BT_INT8:
-                return res + "__int8"
-            elif base == BT_INT16:
-                return res + "__int16"
-            elif base == BT_INT32:
-                return res + "__int32"
-            elif base == BT_INT64:
-                return res + "__int64"
-            elif base == BT_INT128:
-                return res + "__int128"
-            elif base == BT_INT:
-                return res + "int"
-        elif base == BT_BOOL:
-            if flags == BTMT_BOOL1:
-                return "_BOOL1"
-            elif flags == BTMT_BOOL2:
-                return "_BOOL2"
-            elif flags == BTMT_BOOL4:
-                return "_BOOL4"
-            else:
-                return "bool"
-        elif base == BT_FLOAT:
-            if flags == BTMT_FLOAT:
-                return "float"
-            elif flags == BTMT_DOUBLE:
-                return "double"
-            elif flags == BTMT_LNGDBL:
-                return "long double"
-    elif base == BT_PTR:
-        details = tinfo.get_type_details()
-        basetype = get_name_for_type(details.obj_type)
-        return f"{basetype}*"
-    elif base == BT_ARRAY:
-        details = tinfo.get_type_details()
-        basetype = get_name_for_type(details.elem_type)
-        return f"{basetype}[{details.nelems}]"
-    elif base == BT_FUNC:
-        details = tinfo.get_type_details()
-        rettype = get_name_for_type(details.rettype)
-        return f"{rettype}*"
-    elif base == BT_COMPLEX:
-        details = tinfo.get_type_details()
-        if isinstance(details, TypedefTypeData):
-            return details.name
 
 
 class UdtTypeData:
@@ -504,9 +530,9 @@ class UdtTypeData:
                 member.name = fields.read_pstring().decode("ascii")
             if fieldcmts is not None:
                 member.cmt = fieldcmts.read_pstring()
-            member.type = til.deserialize(typestr.ref(),
-                                          fields.ref(),
-                                          fieldcmts.ref())
+            member.type = til.deserialize(typestr,
+                                          fields,
+                                          fieldcmts)
             attr = typestr.read_sdacl_attr()
             if attr is not None:
                 member.tafld_bits = attr
@@ -515,7 +541,7 @@ class UdtTypeData:
         return self
 
     def serialize(self, til, tinfo, typestr, fields, fieldcmts):
-        typ = tinfo.get_base_type()
+        typ = tinfo.get_real_type()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
@@ -534,12 +560,32 @@ class UdtTypeData:
 
     def print(self, name):
         keyword = "union" if self.is_union else "struct"
-        print(f"{keyword} {name}")
-        print("{")
+        res = ""
+        res += f"{keyword} {name}\n"
+        res += "{\n"
         for member in self.members:
-            basetype = get_name_for_type(member.type)
-            print(f"  {basetype} {member.name};")
-        print("};")
+            membertype = member.type
+            res += "  "
+            if membertype.is_ptr() or membertype.is_array():
+                field = print_type(member.type, member.name)
+                res += f"{field};\n"
+            elif membertype.is_bitfield():
+                details = membertype.get_type_details()
+                flags = membertype.get_type_flags()
+                if flags == BTMT_BFLDI8:
+                    res += "__int8"
+                elif flags == BTMT_BFLDI16:
+                    res += "__int16"
+                elif flags == BTMT_BFLDI32:
+                    res += "__int32"
+                elif flags == BTMT_BFLDI64:
+                    res += "__int64"
+                res += f" {member.name} : {details.width};\n"
+            else:
+                field = print_type(member.type, "")
+                res += f"{field} {member.name};\n"
+        res += "}"
+        return res
 
 
 class EnumMember:
@@ -606,7 +652,7 @@ class EnumTypeData:
         return 0xffffffffffffffff
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_base_type()
+        typ = tinfo.get_real_type()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
@@ -623,15 +669,17 @@ class EnumTypeData:
             typestr.append_de(delta)
 
     def print(self, name):
-        print(f"enum {name}")
-        print("{")
+        res = ""
+        res += f"enum {name}\n"
+        res += "{\n"
         out = self.bte & BTE_OUT_MASK
         for member in self.members:
             value = member.value
             if out == BTE_HEX:
                 value = hex(member.value)
-            print(f"  {member.name} = {value}")
-        print("};")
+            res += f"  {member.name} = {value},\n"
+        res += "}"
+        return res
 
 
 class TypedefTypeData:
@@ -659,7 +707,7 @@ class TypedefTypeData:
         return self
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_base_type()
+        typ = tinfo.get_real_type()
         base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
         mod = typ & TYPE_MODIF_MASK
@@ -668,7 +716,10 @@ class TypedefTypeData:
         typestr.append_pstring(self.name)
 
     def print(self, name):
-        print(f"typedef {self.name} {name};")
+        if name:
+            return f"typedef {self.name} {name}"
+        else:
+            return f"{self.name}"
 
 
 class BitfieldTypeData:
@@ -688,4 +739,18 @@ class BitfieldTypeData:
         self.nbytes = 1 << (flags >> 4)
         self.width = dt >> 1
         self.is_unsigned = dt & 1
+        typestr.read_type_attr()
         return self
+
+    def serialize(self, til, tinfo, typestr):
+        typ = tinfo.get_real_type()
+        base = typ & TYPE_BASE_MASK
+        flags = typ & TYPE_FLAGS_MASK
+        mod = typ & TYPE_MODIF_MASK
+
+        typestr.append_db(typ)
+        typestr.append_dt(self.width << 1 | self.is_unsigned)
+
+    def print(self, name):
+        return f" : {self.width}"
+

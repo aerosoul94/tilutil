@@ -1,5 +1,6 @@
 *.dat
 *.til
+*.h
 log.txt
 .idea/
 

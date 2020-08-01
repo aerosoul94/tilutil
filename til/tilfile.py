@@ -63,10 +63,6 @@ class TypeString:
         """ ptr_copy = ptr """
         return TypeString(self._typestring, self._pos)
 
-    def ref(self):
-        """ ptr_ref = &ptr """
-        return TypeString(self._typestring, self._pos, parent=self)
-
     def peek_db(self, pos=0):
         """ u8 val = *(u8*)ptr """
         return self[pos]
@@ -266,15 +262,47 @@ class TypeString:
 class TypeInfo:
     """Representation of tinfo_t."""
     def __init__(self, base_type=dt.BT_UNK):
-        self._base_type = base_type
+        self._real_type = base_type
         self._flags = 0
+        # TODO: Should create a new class TypeDetails to store missing info
         self._typedetails = 0
 
+    def get_real_type(self):
+        return self._real_type
+
     def get_base_type(self):
-        return self._base_type
+        return self._real_type & dt.TYPE_BASE_MASK
+
+    def get_type_flags(self):
+        return self._real_type & dt.TYPE_FLAGS_MASK
+
+    def get_full_type(self):
+        return self._real_type & dt.TYPE_FULL_MASK
 
     def get_type_details(self):
         return self._typedetails
+
+    def is_ptr(self):
+        return self.get_base_type() == dt.BT_PTR
+
+    def is_array(self):
+        return self.get_base_type() == dt.BT_ARRAY
+
+    def is_func(self):
+        return self.get_base_type() == dt.BT_FUNC
+
+    def is_bitfield(self):
+        return self.get_base_type() == dt.BT_BITFIELD
+
+    def print(self, name):
+        if self._typedetails:
+            datatype = self._typedetails.print(name)
+            if datatype is None:
+                print(f"{name} is None")
+            return f"{datatype};\n"
+        #
+        # datatype = dt.print_type(self, name)
+        # return f"{datatype} {name};\n"
 
     @staticmethod
     def create_type_info(base, details=None):
@@ -326,7 +354,7 @@ class TypeData:
     def get_fields(self):
         return self._fields
 
-    def get_field_cmts(self):
+    def get_field_comments(self):
         return self._fieldcmts
 
     def get_comment(self):
@@ -388,6 +416,9 @@ class TILBucket:
 
     def get_types(self):
         return self.types
+
+    def __iter__(self):
+        yield from self.types
 
 
 class TILHeader:
@@ -460,7 +491,7 @@ class TIL:
         for tdata in bucket.get_types():
             tinfo = self.deserialize(tdata.get_type_string(),
                                      tdata.get_fields(),
-                                     tdata.get_field_cmts())
+                                     tdata.get_field_comments())
             if tinfo is not None:
                 self._typeinfos.append(tinfo)
                 tdata.set_type_info(tinfo)
@@ -514,7 +545,7 @@ class TIL:
             return TypeInfo.create_type_info(typ, typedata)
 
     def serialize(self, tinfo, typestr):
-        typ = tinfo.get_base_type()
+        typ = tinfo.get_real_type()
         base = typ & dt.TYPE_BASE_MASK
         flags = typ & dt.TYPE_FLAGS_MASK
         mod = typ & dt.TYPE_MODIF_MASK
@@ -541,24 +572,25 @@ class TIL:
         return self._macros
 
     def get_named_type(self, name, is_type):
-        """ Get a type by its name.
+        """ Get named typeinfo.
 
         Args:
             name: The name of the type
             is_type: True if this is a type and otherwise for symbols
 
-        Returns: TypeData for the type
+        Returns: TypeData
         """
         bucket = self._types if is_type else self._syms
-        for typ in bucket.get_types():
-            if name == typ.get_name():
-                return typ
+        for type_data in bucket.get_types():
+            if name == type_data.get_name():
+                return type_data
+        return None
 
     def get_enums(self):
         enums = []
         for tdata in self._types.get_types():
             tinfo = tdata.get_type_info()
-            typ = tinfo.get_base_type()
+            typ = tinfo.get_real_type()
             base = typ & dt.TYPE_BASE_MASK
             flags = typ & dt.TYPE_FLAGS_MASK
             if base == dt.BT_COMPLEX and flags == dt.BTMT_ENUM:
@@ -569,52 +601,9 @@ class TIL:
         enums = []
         for tdata in self._types.get_types():
             tinfo = tdata.get_type_info()
-            typ = tinfo.get_base_type()
+            typ = tinfo.get_real_type()
             base = typ & dt.TYPE_BASE_MASK
             flags = typ & dt.TYPE_FLAGS_MASK
             if base == dt.BT_COMPLEX and flags == dt.BTMT_STRUCT:
                 enums.append(tdata)
         return enums
-
-
-def dump(til_name):
-    with open(til_name, "rb") as fp:
-        print(f"Loading {til_name}...")
-        til = TIL(fp)
-        print(f"Finished Loading.")
-
-        # Print out enums and structs
-        for enum in til.get_enums():
-            details = enum.get_type_info().get_type_details()
-            details.print(enum.get_name())
-        for struct in til.get_structs():
-            details = struct.get_type_info().get_type_details()
-            details.print(struct.get_name())
-
-        # Elf32_Ehdr (gnuunx.til) serialization test
-        # typedata = til.get_named_type(
-        #     "$160641F2D897670075418D2E6B733231", True)
-        # tinfo = typedata.get_type_info()
-        # typedetails = tinfo.get_type_details()
-        # expected_serialized = typedata.get_type_string().data()
-        # generated_typestring = TypeString()
-        # generated_fields = TypeString()
-        # generated_fieldcmts = TypeString()
-        # typedetails.serialize(til, tinfo, generated_typestring,
-        #                       generated_fields, generated_fieldcmts)
-        # generated_serialized = generated_typestring.data() + b'\0'
-        # print(generated_fields.data() + b'\0')
-        # print("Expected: ", expected_serialized.hex())
-        # print("Actual:   ", generated_serialized.hex())
-        # if generated_serialized == expected_serialized:
-        #     print("Pass")
-        # else:
-        #     print("Fail")
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print(f"Usage {sys.argv[0]} <til file>")
-        exit()
-    dump(sys.argv[1])
-
