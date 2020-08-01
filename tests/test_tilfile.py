@@ -51,4 +51,4 @@ class TestTypeString(TestCase):
     def test_pstring(self):
         ts = TypeString()
         ts.append_pstring("test")
-        self.assertEqual(ts.read_pstring(), "test")
+        self.assertEqual(ts.read_pstring().decode('ascii'), "test")
