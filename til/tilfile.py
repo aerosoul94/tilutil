@@ -1,19 +1,17 @@
 import zlib
 import io
-import sys
-from til import datatypes as dt
 from til.utils import *
+from til.datatypes import *
 
 
 class TypeString:
     """Representation of `qtype`."""
-    def __init__(self, data=None, pos=0, parent=None):
+    def __init__(self, data=None, pos=0):
         if data is None:
             data = bytearray()
         self._offset = pos
         self._pos = pos
         self._typestring = data
-        self._parent = parent
 
     def __getitem__(self, x):
         """Index/slice typestring"""
@@ -29,7 +27,7 @@ class TypeString:
 
     def __len__(self):
         """Get the length of the typestring"""
-        return len(self._typestring)
+        return len(self._typestring) - self._offset
 
     def __iadd__(self, n):
         """Increment stream position"""
@@ -56,8 +54,6 @@ class TypeString:
     def seek(self, n):
         """ ptr+=n """
         self._pos += n
-        if self._parent is not None:
-            self._parent.seek(n)
 
     def get(self):
         """ ptr_copy = ptr """
@@ -123,11 +119,11 @@ class TypeString:
         base = 0
         nelem = 0
         while True:
-            typ = self.peek_db()
-            if typ & 0x80 == 0:
+            c = self.peek_db()
+            if c & 0x80 == 0:
                 break
             self.seek(1)
-            da = (da << 7) | typ & 0x7f
+            da = (da << 7) | c & 0x7f
             b += 1
             if b >= 4:
                 z = self.peek_db()
@@ -135,11 +131,11 @@ class TypeString:
                     base = 0x10 * da | z & 0xf
                 nelem = (self.read_db() >> 4) & 7
                 while True:
-                    y = self.peek_db()
-                    if (y & 0x80) == 0:
+                    c = self.peek_db()
+                    if (c & 0x80) == 0:
                         break
                     self.seek(1)
-                    nelem = (nelem << 7) | y & 0x7f
+                    nelem = (nelem << 7) | c & 0x7f
                     a += 1
                     if a >= 4:
                         return True, nelem, base
@@ -214,17 +210,17 @@ class TypeString:
         self.append(string.encode("ascii"))
 
     def is_tah_byte(self):
-        return self.peek_db() == dt.TAH_BYTE
+        return self.peek_db() == TAH_BYTE
 
     def is_sdacl_byte(self):
-        return ((self.peek_db() & ~dt.TYPE_FLAGS_MASK)
-                ^ dt.TYPE_MODIF_MASK) <= dt.BT_VOID
+        return ((self.peek_db() & ~TYPE_FLAGS_MASK)
+                ^ TYPE_MODIF_MASK) <= BT_VOID
 
     def parse_type_attr(self):
         tah = self.read_db()
         tmp = ((tah & 1) | ((tah >> 3) & 6)) + 1
         res = 0
-        if tah == dt.TAH_BYTE or tmp == 8:
+        if tah == TAH_BYTE or tmp == 8:
             if tmp == 8:
                 res = tmp
             next_byte = self.read_db()
@@ -237,7 +233,7 @@ class TypeString:
                 next_byte = self.read_db()
                 if next_byte == 0:
                     raise ValueError("parse_type_attr(): failed to parse")
-        if res & dt.TAH_HASATTRS:
+        if res & TAH_HASATTRS:
             val = self.read_dt()
             for _ in range(val):
                 self.read_pstring()
@@ -264,38 +260,38 @@ class TypeString:
 
 class TypeInfo:
     """Representation of tinfo_t."""
-    def __init__(self, base_type=dt.BT_UNK):
+    def __init__(self, base_type=BT_UNK):
         self._real_type = base_type
         self._flags = 0
         # TODO: Should create a new class TypeDetails to store missing info
-        self._typedetails = 0
+        self._typedetails = None
 
     def get_real_type(self):
         return self._real_type
 
     def get_base_type(self):
-        return self._real_type & dt.TYPE_BASE_MASK
+        return self._real_type & TYPE_BASE_MASK
 
     def get_type_flags(self):
-        return self._real_type & dt.TYPE_FLAGS_MASK
+        return self._real_type & TYPE_FLAGS_MASK
 
     def get_full_type(self):
-        return self._real_type & dt.TYPE_FULL_MASK
+        return self._real_type & TYPE_FULL_MASK
 
     def get_type_details(self):
         return self._typedetails
 
     def is_ptr(self):
-        return self.get_base_type() == dt.BT_PTR
+        return self.get_base_type() == BT_PTR
 
     def is_array(self):
-        return self.get_base_type() == dt.BT_ARRAY
+        return self.get_base_type() == BT_ARRAY
 
     def is_func(self):
-        return self.get_base_type() == dt.BT_FUNC
+        return self.get_base_type() == BT_FUNC
 
     def is_bitfield(self):
-        return self.get_base_type() == dt.BT_BITFIELD
+        return self.get_base_type() == BT_BITFIELD
 
     def print(self, name):
         if self._typedetails:
@@ -304,7 +300,7 @@ class TypeInfo:
                 print(f"{name} is None")
             return f"{datatype};\n"
         #
-        # datatype = dt.print_type(self, name)
+        # datatype = print_type(self, name)
         # return f"{datatype} {name};\n"
 
     @staticmethod
@@ -440,7 +436,7 @@ TIL_SLD = 0x0100
 class TILBucket:
     """Handle's unpacking a single TIL bucket."""
     def __init__(self, flags, stream):
-        self.types = []
+        self._types = []
         if flags & TIL_ORD:
             self.nords = u32(stream)    # Number of ordinals
 
@@ -455,13 +451,13 @@ class TILBucket:
             self.buffer = stream.read(self.size)
 
     def add_type(self, t):
-        self.types.append(t)
+        self._types.append(t)
 
     def get_types(self):
-        return self.types
+        return self._types
 
     def __iter__(self):
-        yield from self.types
+        yield from self._types
 
 
 class TILHeader:
@@ -551,49 +547,48 @@ class TIL:
             TypeInfo: Output TypeInfo object.
         """
         typ = typestr.peek_db()
-        base = typ & dt.TYPE_BASE_MASK
-        flags = typ & dt.TYPE_FLAGS_MASK
-        mod = typ & dt.TYPE_MODIF_MASK
+        base = typ & TYPE_BASE_MASK
+        flags = typ & TYPE_FLAGS_MASK
 
-        if base <= dt.BT_LAST_BASIC:
-            typestr.seek(1)
+        if base <= BT_LAST_BASIC:
+            typestr += 1
             return TypeInfo(typ)
 
-        if base > dt.BT_LAST_BASIC:
+        if base > BT_LAST_BASIC:
             typedata = None
-            if base == dt.BT_COMPLEX and flags != dt.BTMT_TYPEDEF:
+            if base == BT_COMPLEX and flags != BTMT_TYPEDEF:
                 t = typestr.get()
-                t.seek(1)
+                t += 1
                 N = t.read_complex_n()
                 if N == 0:
-                    typedata = dt.TypedefTypeData()
+                    typedata = TypedefTypeData()
                     typedata.name = t.read_pstring().decode("ascii")
                     # I don't like this, we're going to need to come up with a
                     # way to do this automatically
-                    typestr.seek(t.pos())
+                    typestr += t.pos()
                     return TypeInfo.create_type_info(typ, typedata)
 
-            if base == dt.BT_PTR:
-                typedata = dt.PointerTypeData() \
+            if base == BT_PTR:
+                typedata = PointerTypeData() \
                     .deserialize(self, typestr, fields, fieldcmts)
-            elif base == dt.BT_ARRAY:
-                typedata = dt.ArrayTypeData() \
+            elif base == BT_ARRAY:
+                typedata = ArrayTypeData() \
                     .deserialize(self, typestr, fields, fieldcmts)
-            elif base == dt.BT_FUNC:
-                typedata = dt.FuncTypeData() \
+            elif base == BT_FUNC:
+                typedata = FuncTypeData() \
                     .deserialize(self, typestr, fields, fieldcmts)
-            elif base == dt.BT_COMPLEX:
-                if flags == dt.BTMT_STRUCT or flags == dt.BTMT_UNION:
-                    typedata = dt.UdtTypeData() \
+            elif base == BT_COMPLEX:
+                if flags == BTMT_STRUCT or flags == BTMT_UNION:
+                    typedata = UdtTypeData() \
                         .deserialize(self, typestr, fields, fieldcmts)
-                elif flags == dt.BTMT_ENUM:
-                    typedata = dt.EnumTypeData() \
+                elif flags == BTMT_ENUM:
+                    typedata = EnumTypeData() \
                         .deserialize(self, typestr, fields, fieldcmts)
-                elif flags == dt.BTMT_TYPEDEF:
-                    typedata = dt.TypedefTypeData() \
+                elif flags == BTMT_TYPEDEF:
+                    typedata = TypedefTypeData() \
                         .deserialize(self, typestr, fields, fieldcmts)
-            elif base == dt.BT_BITFIELD:
-                typedata = dt.BitfieldTypeData() \
+            elif base == BT_BITFIELD:
+                typedata = BitfieldTypeData() \
                     .deserialize(self, typestr, fields, fieldcmts)
             return TypeInfo.create_type_info(typ, typedata)
 
@@ -605,15 +600,13 @@ class TIL:
             typestr (TypeString): Output TypeString.
         """
         typ = tinfo.get_real_type()
-        base = typ & dt.TYPE_BASE_MASK
-        flags = typ & dt.TYPE_FLAGS_MASK
-        mod = typ & dt.TYPE_MODIF_MASK
+        base = typ & TYPE_BASE_MASK
 
-        if base <= dt.BT_LAST_BASIC:
+        if base <= BT_LAST_BASIC:
             typestr.append_db(typ)
             return
 
-        if base > dt.BT_LAST_BASIC:
+        if base > BT_LAST_BASIC:
             details = tinfo.get_type_details()
             if details is not None:
                 details.serialize(self, tinfo, typestr)
@@ -671,9 +664,9 @@ class TIL:
         for tdata in self._types.get_types():
             tinfo = tdata.get_type_info()
             typ = tinfo.get_real_type()
-            base = typ & dt.TYPE_BASE_MASK
-            flags = typ & dt.TYPE_FLAGS_MASK
-            if base == dt.BT_COMPLEX and flags == dt.BTMT_ENUM:
+            base = typ & TYPE_BASE_MASK
+            flags = typ & TYPE_FLAGS_MASK
+            if base == BT_COMPLEX and flags == BTMT_ENUM:
                 enums.append(tdata)
         return enums
 
@@ -682,8 +675,8 @@ class TIL:
         for tdata in self._types.get_types():
             tinfo = tdata.get_type_info()
             typ = tinfo.get_real_type()
-            base = typ & dt.TYPE_BASE_MASK
-            flags = typ & dt.TYPE_FLAGS_MASK
-            if base == dt.BT_COMPLEX and flags == dt.BTMT_STRUCT:
+            base = typ & TYPE_BASE_MASK
+            flags = typ & TYPE_FLAGS_MASK
+            if base == BT_COMPLEX and flags == BTMT_STRUCT:
                 enums.append(tdata)
         return enums

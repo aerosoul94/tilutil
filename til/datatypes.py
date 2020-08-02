@@ -205,41 +205,32 @@ class PointerTypeData:
 
     def deserialize(self, til, typestr, fields, fieldcmts):
         typ = typestr.read_db()
-        base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         if flags == BTMT_CLOSURE:
             ptr_size = typestr.read_db()
             # Next byte MUST be RESERVED_BYTE
             if ptr_size == RESERVED_BYTE:
                 # and after it ::BT_FUNC
-                self.closure = til.deserialize(typestr,
-                                               fields,
-                                               fieldcmts)
+                self.closure = til.deserialize(typestr, fields, fieldcmts)
             else:
                 self.based_ptr_size = typestr.read_db()
         self.taptr_bits = typestr.read_type_attr()
-        self.obj_type = til.deserialize(typestr,
-                                        fields,
-                                        fieldcmts)
+        self.obj_type = til.deserialize(typestr, fields, fieldcmts)
         return self
 
     def serialize(self, til, tinfo, typestr):
         typ = tinfo.get_real_type()
-        base = typ & TYPE_BASE_MASK
-        flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         # append type byte
         typestr.append_db(typ)
         til.serialize(self.obj_type, typestr)
 
     def print(self, name):
-        elemtype = self.obj_type
-        if elemtype.is_func():
-            details = elemtype.get_type_details()
-            rettype = print_type(details.rettype, "")
+        obj_type = self.obj_type
+        if obj_type.is_func():
+            details = obj_type.get_type_details()
+            ret_type = print_type(details.rettype, "")
             args = ""
             for n, arg in enumerate(details.args):
                 args += print_type(arg.type, "")
@@ -247,11 +238,11 @@ class PointerTypeData:
                     args += " " + arg.name
                 if n != len(details.args) - 1:
                     args += ", "
-            return f"{rettype} (* {name})({args})"
-        basetype = print_type(elemtype, "")
+            return f"{ret_type} (* {name})({args})"
+        base_type = print_type(obj_type, "")
         if name:
-            return f"{basetype}* {name}"
-        return f"{basetype}*"
+            return f"{base_type}* {name}"
+        return f"{base_type}*"
 
 
 class ArrayTypeData:
@@ -263,25 +254,19 @@ class ArrayTypeData:
 
     def deserialize(self, til, typestr, fields, fieldcmts):
         typ = typestr.read_db()
-        base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         if flags & BTMT_NONBASED:
             self.base = 0
             self.nelems = typestr.read_dt()
         else:
             _, self.nelems, self.base = typestr.read_da()
-        self.elem_type = til.deserialize(typestr,
-                                         fields,
-                                         fieldcmts)
+        self.elem_type = til.deserialize(typestr, fields, fieldcmts)
         return self
 
     def serialize(self, til, tinfo, typestr):
         typ = tinfo.get_real_type()
-        base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         typestr.append_db(typ)
         if flags & BTMT_NONBASED:
@@ -297,8 +282,8 @@ class ArrayTypeData:
             details = elem_type.get_type_details()
             array += f"[{details.nelems}]"
             elem_type = details.elem_type
-        basetype = print_type(elem_type, "")
-        return f"{basetype} {name}{array}"
+        base_type = print_type(elem_type, "")
+        return f"{base_type} {name}{array}"
 
 
 ALOC_NONE = 0
@@ -343,17 +328,42 @@ class FuncTypeData:
 
     def deserialize(self, til, typestr, fields, fieldcmts):
         typ = typestr.read_db()
-        base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
+        self.extract_spoiled(typestr)
+        self.cc = typestr.read_db()
+        self.flags |= 4 * flags
+        typestr.read_type_attr()
+        self.rettype = til.deserialize(typestr, fields, fieldcmts)
+        cc = self.cc & CM_CC_MASK
+        if cc > CM_CC_SPECIALE:
+            if (self.rettype.get_real_type() & TYPE_FULL_MASK) != BT_VOID:
+                self.retloc = self.extract_argloc(typestr)
+        if cc != CM_CC_VOIDARG:
+            N = typestr.read_dt()
+            if N > 256:
+                raise ValueError("Invalid arg count!")
+            if N > 0:
+                for n in range(N):
+                    arg = FuncArg()
+                    if fields is not None:
+                        arg.name = fields.read_pstring().decode("ascii")
+                    if fieldcmts is not None:
+                        arg.cmt = fieldcmts.read_pstring().decode("ascii")
+                    fah = typestr.peek_db()
+                    if fah == FAH_BYTE:
+                        typestr.seek(1)
+                        arg.flags = typestr.read_de()
+                    arg.type = til.deserialize(typestr, fields, fieldcmts)
+                    if cc > CM_CC_SPECIALE:
+                        arg.argloc = self.extract_argloc(typestr)
+                    self.args.append(arg)
+        return self
+
+    def extract_spoiled(self, typestr):
+        # TODO: NOT FULLY TESTED
         cm = typestr.peek_db()
         if (cm & CM_CC_MASK) == CM_CC_SPOILED:
-            # TODO: UNTESTED
-            # raise NotImplementedError(
-            #     "Spoiled register parsing has not been tested.")
-
-            flags = 0
             while True:
                 typestr.seek(1)
                 if (cm & ~CM_CC_MASK) == 15:
@@ -379,43 +389,9 @@ class FuncTypeData:
                     break
         else:
             self.flags = 0
-        self.cc = typestr.read_db()
-        self.flags |= 4 * flags
-        typestr.read_type_attr()
-        self.rettype = til.deserialize(typestr,
-                                       fields,
-                                       fieldcmts)
-        cc = self.cc & CM_CC_MASK
-        if cc > CM_CC_SPECIALE:
-            if (self.rettype.get_real_type() & TYPE_FULL_MASK) != BT_VOID:
-                self.retloc = self.extract_argloc(typestr)
-        if cc != CM_CC_VOIDARG:
-            N = typestr.read_dt()
-            if N > 256:
-                raise ValueError("invalid arg count!")
-            if N > 0:
-                for n in range(N):
-                    arg = FuncArg()
-                    if fields is not None:
-                        arg.name = fields.read_pstring().decode("ascii")
-                    if fieldcmts is not None:
-                        arg.cmt = fieldcmts.read_pstring().decode("ascii")
-                    fah = typestr.peek_db()
-                    if fah == FAH_BYTE:
-                        typestr.seek(1)
-                        arg.flags = typestr.read_de()
-                    arg.type = til.deserialize(typestr,
-                                               fields,
-                                               fieldcmts)
-                    if cc > CM_CC_SPECIALE:
-                        arg.argloc = self.extract_argloc(typestr)
-                    self.args.append(arg)
-        return self
 
     def extract_argloc(self, typestr):
-        # TODO: UNTESTED
-        # raise NotImplementedError("Argloc parsing has not been tested yet.")
-
+        # TODO: NOT FULLY TESTED
         argloc = ArgLoc()
         a = typestr.read_db()
         if a == 0xff:
@@ -455,14 +431,8 @@ class FuncTypeData:
                     pass
         return argloc
 
-    def extract_reginfo(self, typestr):
-        cm = typestr.peek_db()
-
     def serialize(self, til, tinfo, typestr):
         typ = tinfo.get_real_type()
-        base = typ & TYPE_BASE_MASK
-        flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         typestr.append_db(typ)
         typestr.append_db(self.cc)
@@ -473,7 +443,7 @@ class FuncTypeData:
             til.serialize(arg.type, typestr)
 
     def print(self, name):
-        rettype = print_type(self.rettype, "")
+        ret_type = print_type(self.rettype, "")
         args = ""
         for n, arg in enumerate(self.args):
             args += print_type(arg.type, "")
@@ -481,7 +451,7 @@ class FuncTypeData:
                 args += " " + arg.name
             if n != len(self.args) - 1:
                 args += ", "
-        return f"{rettype} {name}({args})"
+        return f"{ret_type} {name}({args})"
 
 
 class UdtMember:
@@ -510,9 +480,6 @@ class UdtTypeData:
 
     def deserialize(self, til, typestr, fields, fieldcmts):
         typ = typestr.read_db()
-        base = typ & TYPE_BASE_MASK
-        flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         self.is_union = (typ & TYPE_FULL_MASK) == BTF_UNION
         N = typestr.read_complex_n()
@@ -530,9 +497,7 @@ class UdtTypeData:
                 member.name = fields.read_pstring().decode("ascii")
             if fieldcmts is not None:
                 member.cmt = fieldcmts.read_pstring()
-            member.type = til.deserialize(typestr,
-                                          fields,
-                                          fieldcmts)
+            member.type = til.deserialize(typestr, fields, fieldcmts)
             attr = typestr.read_sdacl_attr()
             if attr is not None:
                 member.tafld_bits = attr
@@ -542,9 +507,6 @@ class UdtTypeData:
 
     def serialize(self, til, tinfo, typestr, fields, fieldcmts):
         typ = tinfo.get_real_type()
-        base = typ & TYPE_BASE_MASK
-        flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         typestr.append_db(typ)
         mcnt = len(self.members)
@@ -560,8 +522,7 @@ class UdtTypeData:
 
     def print(self, name):
         keyword = "union" if self.is_union else "struct"
-        res = ""
-        res += f"{keyword} {name}\n"
+        res = f"{keyword} {name}\n"
         res += "{\n"
         for member in self.members:
             membertype = member.type
@@ -605,9 +566,6 @@ class EnumTypeData:
 
     def deserialize(self, til, typestr, fields, fieldcmts):
         typ = typestr.read_db()
-        base = typ & TYPE_BASE_MASK
-        flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         N = typestr.read_complex_n()
         if N == 0:
@@ -653,9 +611,6 @@ class EnumTypeData:
 
     def serialize(self, til, tinfo, typestr):
         typ = tinfo.get_real_type()
-        base = typ & TYPE_BASE_MASK
-        flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         typestr.append_db(typ)
         N = len(self.members)
@@ -669,8 +624,7 @@ class EnumTypeData:
             typestr.append_de(delta)
 
     def print(self, name):
-        res = ""
-        res += f"enum {name}\n"
+        res = f"enum {name}\n"
         res += "{\n"
         out = self.bte & BTE_OUT_MASK
         for member in self.members:
@@ -693,9 +647,6 @@ class TypedefTypeData:
 
     def deserialize(self, til, typestr, fields, fieldcmts):
         typ = typestr.read_db()
-        base = typ & TYPE_BASE_MASK
-        flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         self.til = til
         string = typestr.read_pstring()
@@ -708,9 +659,6 @@ class TypedefTypeData:
 
     def serialize(self, til, tinfo, typestr):
         typ = tinfo.get_real_type()
-        base = typ & TYPE_BASE_MASK
-        flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         typestr.append_db(typ)
         typestr.append_pstring(self.name)
@@ -731,9 +679,7 @@ class BitfieldTypeData:
 
     def deserialize(self, til, typestr, fields, fieldcmts):
         typ = typestr.read_db()
-        base = typ & TYPE_BASE_MASK
         flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         dt = typestr.read_dt()
         self.nbytes = 1 << (flags >> 4)
@@ -744,13 +690,10 @@ class BitfieldTypeData:
 
     def serialize(self, til, tinfo, typestr):
         typ = tinfo.get_real_type()
-        base = typ & TYPE_BASE_MASK
-        flags = typ & TYPE_FLAGS_MASK
-        mod = typ & TYPE_MODIF_MASK
 
         typestr.append_db(typ)
         typestr.append_dt(self.width << 1 | self.is_unsigned)
 
     def print(self, name):
-        return f" : {self.width}"
+        return f"{name} : {self.width}"
 
