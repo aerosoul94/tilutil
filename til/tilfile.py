@@ -78,7 +78,8 @@ class TypeString:
 
         Value Range: 0-0xFFFE
         Usage: 16bit numbers
-        :return: int
+        Returns:
+            int: Arbitrary value.
         """
         val = self.read_db()
         if val & 0x80:
@@ -90,7 +91,8 @@ class TypeString:
 
         Value Range: 0-0xFFFFFFFF
         Usage: Enum Deltas
-        :return: int
+        Returns:
+            int: Delta value
         """
         val = 0
         while True:
@@ -112,7 +114,8 @@ class TypeString:
 
         ValueRange: 0x-0x7FFFFFFF, 0-0xFFFFFFFF
         Usage: Arrays
-        :return: (int, int)
+        Returns:
+            (int, int): Number of elements and base.
         """
         a = 0
         b = 0
@@ -312,7 +315,7 @@ class TypeInfo:
 
 
 class TypeData:
-    """Represents the serialized type data"""
+    """Represents the serialized type data."""
     def __init__(self, stream, format):
         self._stream = stream
         self._type = 0              # BT_UNK
@@ -343,27 +346,67 @@ class TypeData:
         return self.get_name()
 
     def get_name(self):
+        """ Get the name for this type.
+
+        Returns:
+            str: Type name.
+        """
         return self._name.decode("ascii")
 
     def get_ordinal(self):
+        """ Get the type's ordinal/value.
+
+        Returns:
+            int: Ordinal or value for symbols.
+        """
         return self._ordinal
 
     def get_type_string(self):
+        """ Get the serialized type info string.
+
+        Returns:
+            TypeString: Serialized type info string.
+        """
         return self._typestr
 
     def get_fields(self):
+        """ Get the serialized field name p-list.
+
+        Returns:
+            TypeString: Serialized field names.
+        """
         return self._fields
 
     def get_field_comments(self):
+        """ Get the serialized field comments p-list.
+
+        Returns:
+            TypeString: Serialized field comments.
+        """
         return self._fieldcmts
 
     def get_comment(self):
+        """ Get the serialized comment p-list.
+
+        Returns:
+            TypeString: Serialized comments.
+        """
         return self._cmt
 
     def set_type_info(self, tinfo):
+        """ Set TypeInfo object.
+
+        Args:
+            tinfo (TypeInfo): Input type info object.
+        """
         self._tinfo = tinfo
 
     def get_type_info(self):
+        """ Get TypeInfo object.
+
+        Returns:
+            TypeInfo: Type info object.
+        """
         return self._tinfo
 
 
@@ -497,6 +540,16 @@ class TIL:
                 tdata.set_type_info(tinfo)
 
     def deserialize(self, typestr, fields, fieldcmts):
+        """ Deserialize a TypeString into a TypeInfo object.
+
+        Args:
+            typestr (TypeString): Input serialized type string.
+            fields (TypeString): Input serialized fields p-list.
+            fieldcmts (TypeString): Input serialized field comments p-list.
+
+        Returns:
+            TypeInfo: Output TypeInfo object.
+        """
         typ = typestr.peek_db()
         base = typ & dt.TYPE_BASE_MASK
         flags = typ & dt.TYPE_FLAGS_MASK
@@ -545,6 +598,12 @@ class TIL:
             return TypeInfo.create_type_info(typ, typedata)
 
     def serialize(self, tinfo, typestr):
+        """ Serialize a TypeInfo object into a TypeString.
+
+        Args:
+            tinfo (TypeInfo): Input TypeInfo object.
+            typestr (TypeString): Output TypeString.
+        """
         typ = tinfo.get_real_type()
         base = typ & dt.TYPE_BASE_MASK
         flags = typ & dt.TYPE_FLAGS_MASK
@@ -560,25 +619,46 @@ class TIL:
                 details.serialize(self, tinfo, typestr)
 
     def get_header(self):
+        """ Get header information.
+
+        Returns:
+            TILHeader: The header information.
+        """
         return self._header
 
     def get_syms(self):
+        """ Get the symbol bucket.
+
+        Returns:
+            TILBucket: The symbol bucket.
+        """
         return self._syms
 
     def get_types(self):
+        """ Get the type bucket.
+
+        Returns:
+            TILBucket: The type bucket.
+        """
         return self._types
 
     def get_macros(self):
+        """ Get the macro bucket.
+
+        Returns:
+            TILBucket: The macro bucket.
+        """
         return self._macros
 
     def get_named_type(self, name, is_type):
         """ Get named typeinfo.
 
         Args:
-            name: The name of the type
-            is_type: True if this is a type and otherwise for symbols
+            name (str): The name of the type.
+            is_type (bool): True if this is a type and otherwise for symbols.
 
-        Returns: TypeData
+        Returns:
+            TypeData: The serialized type data.
         """
         bucket = self._types if is_type else self._syms
         for type_data in bucket.get_types():
