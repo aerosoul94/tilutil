@@ -143,7 +143,7 @@ CM_CC_SPECIAL = 0xF0
 
 
 def print_type(tinfo, name):
-    typ = tinfo.get_real_type()
+    typ = tinfo.get_decl_type()
     base = typ & TYPE_BASE_MASK
     flags = typ & TYPE_FLAGS_MASK
     mod = typ & TYPE_MODIF_MASK
@@ -220,7 +220,7 @@ class PointerTypeData:
         return self
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_real_type()
+        typ = tinfo.get_decl_type()
 
         # append type byte
         typestr.append_db(typ)
@@ -265,7 +265,7 @@ class ArrayTypeData:
         return self
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_real_type()
+        typ = tinfo.get_decl_type()
         flags = typ & TYPE_FLAGS_MASK
 
         typestr.append_db(typ)
@@ -337,7 +337,7 @@ class FuncTypeData:
         self.rettype = til.deserialize(typestr, fields, fieldcmts)
         cc = self.cc & CM_CC_MASK
         if cc > CM_CC_SPECIALE:
-            if (self.rettype.get_real_type() & TYPE_FULL_MASK) != BT_VOID:
+            if (self.rettype.get_decl_type() & TYPE_FULL_MASK) != BT_VOID:
                 self.retloc = self.extract_argloc(typestr)
         if cc != CM_CC_VOIDARG:
             N = typestr.read_dt()
@@ -432,7 +432,7 @@ class FuncTypeData:
         return argloc
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_real_type()
+        typ = tinfo.get_decl_type()
 
         typestr.append_db(typ)
         typestr.append_db(self.cc)
@@ -443,7 +443,25 @@ class FuncTypeData:
             til.serialize(arg.type, typestr)
 
     def print(self, name):
-        ret_type = print_type(self.rettype, "")
+        res = print_type(self.rettype, "") + " "
+        cc = self.cc & CM_CC_MASK
+        if cc == CM_CC_INVALID:
+            res += "__bad_cc "
+        elif cc == CM_CC_CDECL:
+            res += "__cdecl "
+        elif cc == CM_CC_STDCALL:
+            res += "__stdcall "
+        elif cc == CM_CC_PASCAL:
+            res += "__pascal "
+        elif cc == CM_CC_FASTCALL:
+            res += "__fastcall "
+        elif cc == CM_CC_THISCALL:
+            res += "__thiscall "
+        elif cc in (CM_CC_SPECIALE, CM_CC_SPECIAL):
+            res += "__usercall "
+        elif cc == CM_CC_SPECIALP:
+            res += "__userpurge "
+        res += name
         args = ""
         for n, arg in enumerate(self.args):
             args += print_type(arg.type, "")
@@ -451,7 +469,8 @@ class FuncTypeData:
                 args += " " + arg.name
             if n != len(self.args) - 1:
                 args += ", "
-        return f"{ret_type} {name}({args})"
+        res += "(" + args + ")"
+        return res
 
 
 class UdtMember:
@@ -485,10 +504,10 @@ class UdtTypeData:
         N = typestr.read_complex_n()
         if N == 0:
             raise ValueError("Should have been parsed as typedef")
-        attr = typestr.read_sdacl_attr()
         alpow = N & 7
         mcnt = N >> 3
         self.pack = alpow
+        attr = typestr.read_sdacl_attr()
         if attr is not None:
             self.taudt_bits = attr
         for n in range(mcnt):
@@ -506,7 +525,7 @@ class UdtTypeData:
         return self
 
     def serialize(self, til, tinfo, typestr, fields, fieldcmts):
-        typ = tinfo.get_real_type()
+        typ = tinfo.get_decl_type()
 
         typestr.append_db(typ)
         mcnt = len(self.members)
@@ -521,10 +540,21 @@ class UdtTypeData:
                 fieldcmts.append_pstring(member.cmt)
 
     def print(self, name):
-        keyword = "union" if self.is_union else "struct"
-        res = f"{keyword} {name}\n"
+        res = "union " if self.is_union else "struct "
+        if self.taudt_bits & TAUDT_MSSTRUCT:
+            res += "__attribute__((msstruct)) "
+        if self.taudt_bits & TAUDT_CPPOBJ:
+            res += "__cppobj "
+        res += name + " "
+        for i, member in enumerate(self.members):
+            if member.tafld_bits & TAFLD_BASECLASS:
+                res += ": " if i == 0 else ", "
+                res += print_type(member.type, "")
+        res += "\n"
         res += "{\n"
         for member in self.members:
+            if member.tafld_bits & TAFLD_BASECLASS:
+                continue
             membertype = member.type
             res += "  "
             if membertype.is_ptr() or membertype.is_array():
@@ -570,8 +600,9 @@ class EnumTypeData:
         N = typestr.read_complex_n()
         if N == 0:
             raise ValueError("Should have been parsed as typedef")
-        taenum_bits = typestr.read_type_attr()
-        self.taenum_bits = taenum_bits if taenum_bits is not None else 0
+        attr = typestr.read_type_attr()
+        if attr is not None:
+            self.taenum_bits = attr
         self.bte = typestr.read_db()
         if not (self.bte & BTE_ALWAYS):
             raise ValueError("Enum bte must have BTE_ALWAYS set")
@@ -610,7 +641,7 @@ class EnumTypeData:
         return 0xffffffffffffffff
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_real_type()
+        typ = tinfo.get_decl_type()
 
         typestr.append_db(typ)
         N = len(self.members)
@@ -658,7 +689,7 @@ class TypedefTypeData:
         return self
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_real_type()
+        typ = tinfo.get_decl_type()
 
         typestr.append_db(typ)
         typestr.append_pstring(self.name)
@@ -689,7 +720,7 @@ class BitfieldTypeData:
         return self
 
     def serialize(self, til, tinfo, typestr):
-        typ = tinfo.get_real_type()
+        typ = tinfo.get_decl_type()
 
         typestr.append_db(typ)
         typestr.append_dt(self.width << 1 | self.is_unsigned)

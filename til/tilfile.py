@@ -238,6 +238,7 @@ class TypeString:
             for _ in range(val):
                 self.read_pstring()
                 self.read_pstring()
+        return res
 
     def read_type_attr(self):
         if self.is_tah_byte():
@@ -245,7 +246,7 @@ class TypeString:
 
     def read_sdacl_attr(self):
         if self.is_sdacl_byte():
-            return self.read_type_attr()
+            return self.parse_type_attr()
 
     @staticmethod
     def read_typestring(stream):
@@ -261,22 +262,22 @@ class TypeString:
 class TypeInfo:
     """Representation of tinfo_t."""
     def __init__(self, base_type=BT_UNK):
-        self._real_type = base_type
+        self._type = base_type
         self._flags = 0
         # TODO: Should create a new class TypeDetails to store missing info
         self._typedetails = None
 
-    def get_real_type(self):
-        return self._real_type
+    def get_decl_type(self):
+        return self._type
 
     def get_base_type(self):
-        return self._real_type & TYPE_BASE_MASK
+        return self._type & TYPE_BASE_MASK
 
     def get_type_flags(self):
-        return self._real_type & TYPE_FLAGS_MASK
+        return self._type & TYPE_FLAGS_MASK
 
     def get_full_type(self):
-        return self._real_type & TYPE_FULL_MASK
+        return self._type & TYPE_FULL_MASK
 
     def get_type_details(self):
         return self._typedetails
@@ -619,7 +620,7 @@ class TIL:
             tinfo (TypeInfo): Input TypeInfo object.
             typestr (TypeString): Output TypeString.
         """
-        typ = tinfo.get_real_type()
+        typ = tinfo.get_decl_type()
         base = typ & TYPE_BASE_MASK
 
         if base <= BT_LAST_BASIC:
@@ -683,7 +684,7 @@ class TIL:
         enums = []
         for tdata in self._types.get_types():
             tinfo = tdata.get_type_info()
-            typ = tinfo.get_real_type()
+            typ = tinfo.get_decl_type()
             base = typ & TYPE_BASE_MASK
             flags = typ & TYPE_FLAGS_MASK
             if base == BT_COMPLEX and flags == BTMT_ENUM:
@@ -694,7 +695,7 @@ class TIL:
         structs = []
         for tdata in self._types.get_types():
             tinfo = tdata.get_type_info()
-            typ = tinfo.get_real_type()
+            typ = tinfo.get_decl_type()
             base = typ & TYPE_BASE_MASK
             flags = typ & TYPE_FLAGS_MASK
             if base == BT_COMPLEX and flags == BTMT_STRUCT:
