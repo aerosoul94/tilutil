@@ -414,11 +414,31 @@ class Macro:
     def __init__(self, stream):
         self._name = cstring(stream)
         self._nparams = u8(stream)
-        self._isfunc = u8(stream)
+        self._isfunc = bool(u8(stream))
         self._value = cstring(stream)
 
     def get_name(self):
-        return self._name.decode("ascii")
+        name = self._name.decode("ascii")
+        if self._isfunc:
+            name += "("
+            for n in range(self._nparams):
+                name += chr(0x41 + n)
+                if n != self._nparams - 1:
+                    name += ","
+            name += ")"
+        return name
+
+    def get_value(self):
+        # TODO: I don't expect this to be reliable.
+        if self._isfunc:
+            # Each argument is encoded as 0x80 | (n) where n is the param index.
+            for i, b in enumerate(self._value):
+                if b & 0x80:
+                    self._value[i] = 0x41 + (b & 0x7f)
+        return self._value.decode("ascii")
+
+    def print(self):
+        return f"#define {self.get_name()} {self.get_value()}\n"
 
 
 # TIL values for `flags`
@@ -671,12 +691,12 @@ class TIL:
         return enums
 
     def get_structs(self):
-        enums = []
+        structs = []
         for tdata in self._types.get_types():
             tinfo = tdata.get_type_info()
             typ = tinfo.get_real_type()
             base = typ & TYPE_BASE_MASK
             flags = typ & TYPE_FLAGS_MASK
             if base == BT_COMPLEX and flags == BTMT_STRUCT:
-                enums.append(tdata)
-        return enums
+                structs.append(tdata)
+        return structs

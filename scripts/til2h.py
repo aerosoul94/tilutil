@@ -30,6 +30,9 @@ def dump(tilname, header):
             if data:
                 op.write(data)
 
+        for macro in til.get_macros():
+            op.write(macro.print())
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
