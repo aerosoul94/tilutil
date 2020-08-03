@@ -153,8 +153,22 @@ def print_type(tinfo, name):
     if mod & BTM_VOLATILE:
         res += "volatile "
     if base <= BT_LAST_BASIC:
+        if base == BT_UNK:
+            if flags == BTMT_SIZE12:
+                return "_WORD"
+            elif flags == BTMT_SIZE48:
+                return "_QWORD"
+            elif flags == BTMT_SIZE128:
+                return "_UNKNOWN"
         if base == BT_VOID:
-            return "void"
+            if flags == BTMT_SIZE12:
+                return "_BYTE"
+            elif flags == BTMT_SIZE48:
+                return "_DWORD"
+            elif flags == BTMT_SIZE128:
+                return "_OWORD"
+            else:
+                return "void"
         elif base <= BT_INT:
             if flags & BTMT_SIGNED:
                 res += "signed "
@@ -178,6 +192,7 @@ def print_type(tinfo, name):
             if flags == BTMT_BOOL1:
                 return "_BOOL1"
             elif flags == BTMT_BOOL2:
+                #return "_BOOL8" if inf.is_64bit() else "_BOOL2"
                 return "_BOOL2"
             elif flags == BTMT_BOOL4:
                 return "_BOOL4"
@@ -190,6 +205,9 @@ def print_type(tinfo, name):
                 return "double"
             elif flags == BTMT_LNGDBL:
                 return "long double"
+            elif flags == BTMT_SPECFLT:
+                return "short float"
+            #     return "_TBYTE" if ph.flags & PR_USE_TBYTE else "short float"
     elif base > BT_LAST_BASIC:
         details = tinfo.get_type_details()
         return details.print(name)

@@ -234,10 +234,11 @@ class TypeString:
                 if next_byte == 0:
                     raise ValueError("parse_type_attr(): failed to parse")
         if res & TAH_HASATTRS:
+            # deserialize type_attrs_t
             val = self.read_dt()
             for _ in range(val):
-                self.read_pstring()
-                self.read_pstring()
+                key = self.read_pstring()
+                val = self.read_pstring()
         return res
 
     def read_type_attr(self):
