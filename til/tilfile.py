@@ -490,7 +490,13 @@ class TILHeader:
 
     def _read(self):
         self.sig = self._stream.read(6)
+        if self.sig != b'IDATIL':
+            raise ValueError("Unexpected TIL signature")
+
         self.form = u32(self._stream)
+        if self.form > 0x12:
+            raise ValueError("Unexpected TIL format")
+
         self.flag = u32(self._stream)
         self.titlelen = u8(self._stream)
         self.title = self._stream.read(self.titlelen)
