@@ -1,19 +1,20 @@
+import struct
 
 
 def u8(stream):
-    return int.from_bytes(stream.read(1), byteorder='little')
+    return struct.unpack("<B", stream.read(1))[0]
 
 
 def u16(stream):
-    return int.from_bytes(stream.read(2), byteorder='little')
+    return struct.unpack("<H", stream.read(2))[0]
 
 
 def u32(stream):
-    return int.from_bytes(stream.read(4), byteorder='little')
+    return struct.unpack("<I", stream.read(4))[0]
 
 
 def u64(stream):
-    return int.from_bytes(stream.read(8), byteorder='little')
+    return struct.unpack("<Q", stream.read(8))[0]
 
 
 def to_s32(n):

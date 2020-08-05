@@ -1,4 +1,6 @@
-from til.utils import to_s32
+from abc import ABCMeta, abstractmethod
+from .tilfile import *
+from .utils import *
 
 RESERVED_BYTE = 0xFF
 
@@ -210,10 +212,54 @@ def print_type(tinfo, name):
             #     return "_TBYTE" if ph.flags & PR_USE_TBYTE else "short float"
     elif base > BT_LAST_BASIC:
         details = tinfo.get_type_details()
-        return details.print(name)
+        return details.print_type(name)
 
 
-class PointerTypeData:
+class BaseTypeData:
+    __metaclass__ = ABCMeta
+
+    @abstractmethod
+    def deserialize(self, til, typestr, fields, fieldcmts):
+        """Deserialize a type string into a TypeInfo object.
+
+        Args:
+            til (TIL): Type info library
+            typestr (TypeString): Type string
+            fields (TypeString): List of field names
+            fieldcmts (TypeString): List of field comments
+
+        Returns:
+            BaseTypeData: Deserialized type data
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def serialize(self, til, tinfo, typestr, fields, fieldcmts):
+        """Serialize a TypeInfo object into a type string.
+
+        Args:
+            til (TIL): Type info library
+            tinfo (TypeInfo): Input TypeInfo object
+            typestr (TypeString): Type string
+            fields (TypeString): List of field names
+            fieldcmts (TypeString): List of field comments
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def print_type(self, name):
+        """Print this type using name as the type name.
+
+        Args:
+            name (str): Type name
+
+        Returns:
+            str: Printed type
+        """
+        raise NotImplementedError()
+
+
+class PointerTypeData(BaseTypeData):
     """Representation of ptr_type_data_t"""
     def __init__(self):
         self.obj_type = None
@@ -237,14 +283,14 @@ class PointerTypeData:
         self.obj_type = til.deserialize(typestr, fields, fieldcmts)
         return self
 
-    def serialize(self, til, tinfo, typestr):
+    def serialize(self, til, tinfo, typestr, fields, fieldcmts):
         typ = tinfo.get_decl_type()
 
         # append type byte
         typestr.append_db(typ)
         til.serialize(self.obj_type, typestr)
 
-    def print(self, name):
+    def print_type(self, name):
         obj_type = self.obj_type
         if obj_type.is_func():
             details = obj_type.get_type_details()
@@ -256,14 +302,14 @@ class PointerTypeData:
                     args += " " + arg.name
                 if n != len(details.args) - 1:
                     args += ", "
-            return f"{ret_type} (* {name})({args})"
+            return "{} (* {})({})".format(ret_type, name, args)
         base_type = print_type(obj_type, "")
         if name:
-            return f"{base_type}* {name}"
-        return f"{base_type}*"
+            return "{}* {}".format(base_type, name)
+        return "{}*".format(base_type)
 
 
-class ArrayTypeData:
+class ArrayTypeData(BaseTypeData):
     """Representation of array_type_data_t"""
     def __init__(self):
         self.elem_type = None
@@ -282,7 +328,7 @@ class ArrayTypeData:
         self.elem_type = til.deserialize(typestr, fields, fieldcmts)
         return self
 
-    def serialize(self, til, tinfo, typestr):
+    def serialize(self, til, tinfo, typestr, fields, fieldcmts):
         typ = tinfo.get_decl_type()
         flags = typ & TYPE_FLAGS_MASK
 
@@ -293,15 +339,15 @@ class ArrayTypeData:
             typestr.append_da(self.nelems, self.base)
         til.serialize(self.elem_type, typestr)
 
-    def print(self, name):
+    def print_type(self, name):
         elem_type = self.elem_type
-        array = f"[{self.nelems}]"
+        array = "[{}]".format(self.nelems)
         while elem_type.is_array():
             details = elem_type.get_type_details()
-            array += f"[{details.nelems}]"
+            array += "[{}]".format(details.nelems)
             elem_type = details.elem_type
         base_type = print_type(elem_type, "")
-        return f"{base_type} {name}{array}"
+        return "{} {}{}".format(base_type, name, array)
 
 
 ALOC_NONE = 0
@@ -334,7 +380,7 @@ class FuncArg:
         self.flags = 0
 
 
-class FuncTypeData:
+class FuncTypeData(BaseTypeData):
     def __init__(self):
         self.args = []
         self.flags = 0          # FTI_*
@@ -449,7 +495,7 @@ class FuncTypeData:
                     pass
         return argloc
 
-    def serialize(self, til, tinfo, typestr):
+    def serialize(self, til, tinfo, typestr, fields, fieldcmts):
         typ = tinfo.get_decl_type()
 
         typestr.append_db(typ)
@@ -460,7 +506,7 @@ class FuncTypeData:
         for arg in self.args:
             til.serialize(arg.type, typestr)
 
-    def print(self, name):
+    def print_type(self, name):
         res = print_type(self.rettype, "") + " "
         cc = self.cc & CM_CC_MASK
         if cc == CM_CC_INVALID:
@@ -503,7 +549,7 @@ class UdtMember:
         self.fda = 0
 
 
-class UdtTypeData:
+class UdtTypeData(BaseTypeData):
     """Representation of udt_type_data_t"""
     def __init__(self):
         self.members = []
@@ -557,7 +603,7 @@ class UdtTypeData:
             if fieldcmts is not None and member.cmt:
                 fieldcmts.append_pstring(member.cmt)
 
-    def print(self, name):
+    def print_type(self, name):
         res = "union " if self.is_union else "struct "
         if self.taudt_bits & TAUDT_MSSTRUCT:
             res += "__attribute__((msstruct)) "
@@ -577,7 +623,7 @@ class UdtTypeData:
             res += "  "
             if membertype.is_ptr() or membertype.is_array():
                 field = print_type(member.type, member.name)
-                res += f"{field};\n"
+                res += "{};\n".format(field)
             elif membertype.is_bitfield():
                 details = membertype.get_type_details()
                 flags = membertype.get_type_flags()
@@ -589,10 +635,10 @@ class UdtTypeData:
                     res += "__int32"
                 elif flags == BTMT_BFLDI64:
                     res += "__int64"
-                res += f" {member.name} : {details.width};\n"
+                res += " {} : {};\n".format(member.name, details.width)
             else:
                 field = print_type(member.type, "")
-                res += f"{field} {member.name};\n"
+                res += "{} {};\n".format(field, member.name)
         res += "}"
         return res
 
@@ -604,7 +650,7 @@ class EnumMember:
         self.value = 0
 
 
-class EnumTypeData:
+class EnumTypeData(BaseTypeData):
     """Representation of enum_type_data_t"""
     def __init__(self):
         self.group_sizes = []   # intvec_t (qvector<int>)
@@ -658,7 +704,7 @@ class EnumTypeData:
             return (1 << bitsize) - 1
         return 0xffffffffffffffff
 
-    def serialize(self, til, tinfo, typestr):
+    def serialize(self, til, tinfo, typestr, fields, fieldcmts):
         typ = tinfo.get_decl_type()
 
         typestr.append_db(typ)
@@ -672,20 +718,20 @@ class EnumTypeData:
             prev = curr
             typestr.append_de(delta)
 
-    def print(self, name):
-        res = f"enum {name}\n"
+    def print_type(self, name):
+        res = "enum {}\n".format(name)
         res += "{\n"
         out = self.bte & BTE_OUT_MASK
         for member in self.members:
             value = member.value
             if out == BTE_HEX:
                 value = hex(member.value)
-            res += f"  {member.name} = {value},\n"
+            res += "  {} = {},\n".format(member.name, value)
         res += "}"
         return res
 
 
-class TypedefTypeData:
+class TypedefTypeData(BaseTypeData):
     """Representation of typedef_type_data_t"""
     def __init__(self):
         self.til = None
@@ -706,20 +752,20 @@ class TypedefTypeData:
             self.name = string.decode("ascii")
         return self
 
-    def serialize(self, til, tinfo, typestr):
+    def serialize(self, til, tinfo, typestr, fields, fieldcmts):
         typ = tinfo.get_decl_type()
 
         typestr.append_db(typ)
         typestr.append_pstring(self.name)
 
-    def print(self, name):
+    def print_type(self, name):
         if name:
-            return f"typedef {self.name} {name}"
+            return "typedef {} {}".format(self.name, name)
         else:
-            return f"{self.name}"
+            return "{}".format(self.name)
 
 
-class BitfieldTypeData:
+class BitfieldTypeData(BaseTypeData):
     """Representation of bitfield_type_data_t"""
     def __init__(self):
         self.nbytes = 0
@@ -737,12 +783,12 @@ class BitfieldTypeData:
         typestr.read_type_attr()
         return self
 
-    def serialize(self, til, tinfo, typestr):
+    def serialize(self, til, tinfo, typestr, fields, fieldcmts):
         typ = tinfo.get_decl_type()
 
         typestr.append_db(typ)
         typestr.append_dt(self.width << 1 | self.is_unsigned)
 
-    def print(self, name):
-        return f"{name} : {self.width}"
+    def print_type(self, name):
+        return "{} : {}".format(name, self.width)
 

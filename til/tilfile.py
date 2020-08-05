@@ -1,7 +1,7 @@
 import zlib
 import io
-from til.utils import *
-from til.datatypes import *
+from .datatypes import *
+from .utils import *
 
 
 class TypeString:
@@ -11,7 +11,7 @@ class TypeString:
             data = bytearray()
         self._offset = pos
         self._pos = pos
-        self._typestring = data
+        self._typestring = bytearray(data)
 
     def __getitem__(self, x):
         """Index/slice typestring"""
@@ -110,8 +110,9 @@ class TypeString:
 
         ValueRange: 0x-0x7FFFFFFF, 0-0xFFFFFFFF
         Usage: Arrays
+
         Returns:
-            (int, int): Number of elements and base.
+            (bool, int, int): Status, number of elements, and base.
         """
         a = 0
         b = 0
@@ -295,12 +296,12 @@ class TypeInfo:
     def is_bitfield(self):
         return self.get_base_type() == BT_BITFIELD
 
-    def print(self, name):
+    def print_type(self, name):
         if self._typedetails:
-            datatype = self._typedetails.print(name)
+            datatype = self._typedetails.print_type(name)
             if datatype is None:
-                print(f"{name} is None")
-            return f"{datatype};\n"
+                print("{} is None".format(name))
+            return "{};\n".format(datatype)
         #
         # datatype = print_type(self, name)
         # return f"{datatype} {name};\n"
@@ -439,8 +440,8 @@ class Macro:
                     self._value[i] = 0x41 + (b & 0x7f)
         return self._value.decode("ascii")
 
-    def print(self):
-        return f"#define {self.get_name()} {self.get_value()}\n"
+    def print_type(self):
+        return "#define {} {}\n".format(self.get_name(), self.get_value())
 
 
 # TIL values for `flags`
@@ -479,7 +480,13 @@ class TILBucket:
         return self._types
 
     def __iter__(self):
-        yield from self._types
+        """Yields a type from the type list.
+
+        Returns:
+            Union[TypeData,Macro]: Serialized type data.
+        """
+        for typ in self._types:
+            yield typ
 
 
 class TILHeader:
