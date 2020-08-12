@@ -34,6 +34,9 @@ class TypeString:
         self._pos += n
         return self
 
+    def __eq__(self, other):
+        return self.data() == other.data()
+
     def data(self):
         return self._typestring
 

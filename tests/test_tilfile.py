@@ -3,6 +3,13 @@ from unittest import TestCase
 
 
 class TestTypeString(TestCase):
+    def test_equality(self):
+        ts1 = TypeString(b'\x01\x02\x03\x04')
+        ts2 = TypeString(b'\x01\x02\x03\x04')
+        ts3 = TypeString(b'\x05\x06\x07\x08')
+        self.assertEqual(ts1, ts2)
+        self.assertNotEqual(ts2, ts3)
+
     def test_peek(self):
         ts = TypeString(b'\x01\x02\x03\x04')
         self.assertEqual(ts.peek(1), b'\x01')
@@ -19,7 +26,10 @@ class TestTypeString(TestCase):
 
     def test_seek(self):
         ts = TypeString(b'\x01\x02\x03\x04')
-        ts.seek(3)
+        ts.seek(2)
+        self.assertEqual(ts.pos(), 2)
+        self.assertEqual(ts.peek_db(), 0x03)
+        ts += 1
         self.assertEqual(ts.pos(), 3)
         self.assertEqual(ts.peek_db(), 0x04)
 
