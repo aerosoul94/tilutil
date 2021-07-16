@@ -428,7 +428,7 @@ class Macro:
         if self._isfunc:
             name += "("
             for n in range(self._nparams):
-                name += chr(0x41 + n)
+                name += 'a' + str(n)
                 if n != self._nparams - 1:
                     name += ","
             name += ")"
@@ -436,12 +436,22 @@ class Macro:
 
     def get_value(self):
         # TODO: I don't expect this to be reliable.
+        #   This may break when a macro contains a token named 'a' + some number (example: a0)
+        #   It may also break if nparams > 0x7f
+        value = self._value
         if self._isfunc:
             # Each argument is encoded as 0x80 | (n) where n is the param index.
+            # Decode arguments to strings in the format 'a' + str(param index).
+            value = b""
+            start = 0
             for i, b in enumerate(self._value):
                 if b & 0x80:
-                    self._value[i] = 0x41 + (b & 0x7f)
-        return self._value.decode("ascii")
+                    # Copy the text in between this encoded argument and the last one.
+                    value += self._value[start:i]
+                    value += b'a' + bytearray(str(b & 0x7f), encoding='ascii')
+                    start = i+1
+            value += self._value[start:]
+        return value.decode("ascii")
 
     def print_type(self):
         return "#define {} {}\n".format(self.get_name(), self.get_value())
